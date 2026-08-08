@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0c0d">
+  <title>Arkan Vault</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="/" aria-label="Arkan Vault">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><strong>ARKAN</strong><small>VAULT</small></span>
+      </a>
+
+      <nav class="primary-nav" aria-label="Navegação principal">
+        <button class="nav-item active" data-view="library">
+          <span class="nav-icon">◫</span><span>Biblioteca</span><span class="nav-count" id="all-count">0</span>
+        </button>
+        <button class="nav-item" data-view="recent">
+          <span class="nav-icon">◷</span><span>Recentes</span>
+        </button>
+        <button class="nav-item" data-view="graph">
+          <span class="nav-icon">⌘</span><span>Grafo neural</span>
+        </button>
+        <button class="nav-item" data-view="files">
+          <span class="nav-icon">▣</span><span>Arquivos</span><span class="nav-count" id="file-count">0</span>
+        </button>
+        <button class="nav-item" data-view="system">
+          <span class="nav-icon">◎</span><span>Sistema</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-section">
+        <div class="section-label"><span>Tipos</span><button id="clear-filters" title="Limpar filtros">limpar</button></div>
+        <div id="type-filters" class="filter-list"></div>
+      </div>
+
+      <div class="sidebar-section project-section">
+        <div class="section-label"><span>Projetos</span></div>
+        <div id="project-filters" class="filter-list"></div>
+      </div>
+
+      <div class="vault-status">
+        <span class="status-dot"></span>
+        <div><strong>Vault online</strong><small id="health-label">verificando sistema</small></div>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <button class="icon-button mobile-menu" id="menu-button" aria-label="Abrir menu">☰</button>
+        <div class="search-wrap">
+          <span class="search-icon">⌕</span>
+          <input id="search-input" type="search" placeholder="Busque uma ideia, decisão ou memória…" autocomplete="off">
+          <kbd>/</kbd>
+        </div>
+        <select id="search-mode" class="mode-select" aria-label="Modo de busca">
+          <option value="hybrid">Híbrida</option>
+          <option value="semantic">Semântica</option>
+          <option value="text">Textual</option>
+        </select>
+        <button class="primary-button" id="new-memory"><span>＋</span> Nova memória</button>
+        <button class="secondary-button upload-button" id="upload-file"><span>↑</span> Enviar arquivo</button>
+        <input id="file-input" type="file" hidden>
+      </header>
+
+      <section class="content-area">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">MEMÓRIA PERSISTENTE</p>
+            <h1 id="view-title">Sua biblioteca</h1>
+            <p id="view-subtitle">Tudo que seus agentes precisam lembrar, organizado em um só lugar.</p>
+          </div>
+          <div class="view-actions">
+            <button class="icon-button" id="refresh-button" title="Atualizar">↻</button>
+            <button class="view-toggle active" data-layout="grid" title="Grade">⊞</button>
+            <button class="view-toggle" data-layout="list" title="Lista">☷</button>
+          </div>
+        </div>
+
+        <div class="stats-strip" id="stats-strip">
+          <div><span id="stat-memories">0</span><small>memórias</small></div>
+          <div><span id="stat-projects">0</span><small>projetos</small></div>
+          <div><span id="stat-types">0</span><small>tipos</small></div>
+          <div class="active-context"><span id="active-mode">HYBRID</span><small>motor ativo</small></div>
+        </div>
+
+        <div class="results-meta">
+          <p id="results-label">Carregando memórias…</p>
+          <div id="active-filters" class="active-filters"></div>
+        </div>
+
+        <div class="memory-grid" id="memory-grid" aria-live="polite"></div>
+
+        <div class="empty-state hidden" id="empty-state">
+          <div class="empty-glyph"><span>◇</span></div>
+          <h2>Nenhuma memória encontrada</h2>
+          <p id="empty-message">Crie a primeira memória do seu vault para começar.</p>
+          <button class="secondary-button" id="empty-create">Criar memória</button>
+        </div>
+
+        <section class="graph-view hidden" id="graph-view">
+          <div class="graph-heading">
+            <div><p class="eyebrow">MAPA DA MEMÓRIA</p><h1>Sua mente expandida</h1><p>Projetos, relações e ideias formando uma rede viva.</p></div>
+            <div class="graph-controls">
+              <label><span>Período</span><select id="graph-period"><option value="">Todo o histórico</option><option value="7">7 dias</option><option value="30">30 dias</option><option value="365">1 ano</option></select></label>
+              <label><span>Tipo</span><select id="graph-type"><option value="">Todos</option></select></label>
+              <button class="icon-button" id="graph-reset" title="Centralizar grafo">◎</button>
+              <button class="icon-button" id="graph-pause" title="Pausar movimento">Ⅱ</button>
+            </div>
+          </div>
+          <div class="graph-metrics">
+            <span><strong id="graph-node-count">0</strong> memórias</span>
+            <span><strong id="graph-edge-count">0</strong> conexões</span>
+            <span><strong id="graph-project-count">0</strong> constelações</span>
+            <div class="graph-legend"><i class="relation"></i>relação <i class="semantic"></i>semântica <i class="project"></i>contexto</div>
+          </div>
+          <div class="graph-stage" id="graph-stage">
+            <canvas id="memory-graph" role="img" aria-label="Grafo interativo das memórias do Arkan Vault"></canvas>
+            <div class="graph-tooltip hidden" id="graph-tooltip"></div>
+            <div class="graph-instructions">Arraste para explorar · Scroll para zoom · Clique em um nó para abrir</div>
+            <div class="graph-empty hidden" id="graph-empty"><span>◇</span><p>Crie mais memórias ou relações para expandir este mapa.</p></div>
+          </div>
+        </section>
+        <section class="system-view hidden" id="system-view">
+          <div class="system-heading"><div><p class="eyebrow">CENTRO OPERACIONAL</p><h1>Saúde do Vault</h1><p>Servidor, armazenamento, índices e backups em uma única visão.</p></div><button class="secondary-button" id="system-refresh">Atualizar agora</button></div>
+          <div class="system-grid">
+            <article class="system-card system-hero"><small>ESTADO GERAL</small><strong id="sys-status">Verificando…</strong><span id="sys-host">—</span></article>
+            <article class="system-card"><small>TEMPO ONLINE</small><strong id="sys-uptime">—</strong><span>desde a última inicialização</span></article>
+            <article class="system-card"><small>MEMÓRIAS</small><strong id="sys-memories">—</strong><span id="sys-indexes">—</span></article>
+            <article class="system-card"><small>ARQUIVOS</small><strong id="sys-files">—</strong><span id="sys-markdown">—</span></article>
+            <article class="system-card system-wide"><small>ARMAZENAMENTO</small><strong id="sys-disk">—</strong><div class="storage-bar"><i id="sys-disk-bar"></i></div><span id="sys-vault-size">—</span></article>
+            <article class="system-card system-wide"><small>BACKUP MAIS RECENTE</small><strong id="sys-backup">—</strong><span id="sys-backup-detail">—</span></article>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <aside class="detail-panel" id="detail-panel" aria-hidden="true">
+      <div class="detail-toolbar">
+        <span class="detail-kicker">MEMORY OBJECT</span>
+        <button class="icon-button" id="close-detail" aria-label="Fechar detalhes">×</button>
+      </div>
+      <div id="detail-content"></div>
+    </aside>
+  </div>
+
+  <div class="overlay" id="overlay"></div>
+
+  <dialog class="memory-dialog" id="memory-dialog">
+    <form id="memory-form" method="dialog">
+      <header>
+        <div><p class="eyebrow" id="form-eyebrow">NOVA ENTRADA</p><h2 id="form-title">Criar memória</h2></div>
+        <button type="button" class="icon-button" id="close-form">×</button>
+      </header>
+      <input type="hidden" id="memory-id">
+      <div class="form-grid">
+        <label class="field field-wide"><span>Título *</span><input id="field-title" required maxlength="500" placeholder="O que vale a pena lembrar?"></label>
+        <label class="field"><span>Tipo</span><input id="field-type" value="memory" list="type-options" placeholder="memory"></label>
+        <datalist id="type-options"><option value="memory"><option value="idea"><option value="decision"><option value="task"><option value="conversation"><option value="document"><option value="person"><option value="project"></datalist>
+        <label class="field"><span>Projeto</span><input id="field-project" placeholder="arkan-vault"></label>
+        <label class="field field-wide"><span>Resumo</span><textarea id="field-summary" rows="2" placeholder="Uma visão rápida desta memória"></textarea></label>
+        <label class="field field-wide"><span>Conteúdo em Markdown</span><textarea id="field-content" rows="9" placeholder="# Contexto&#10;&#10;Registre aqui ideias, decisões e detalhes importantes…"></textarea></label>
+        <label class="field field-wide"><span>Tags</span><input id="field-tags" placeholder="inteligência artificial, arquitetura, decisão"><small>Separe por vírgulas</small></label>
+        <label class="field"><span>Fonte</span><input id="field-source" value="web" placeholder="web"></label>
+        <label class="field"><span>Idioma</span><input id="field-language" value="pt-BR" placeholder="pt-BR"></label>
+      </div>
+      <footer><button type="button" class="ghost-button" id="cancel-form">Cancelar</button><button type="submit" class="primary-button" id="save-memory">Salvar memória</button></footer>
+    </form>
+  </dialog>
+
+  <dialog class="confirm-dialog" id="confirm-dialog">
+    <div class="danger-icon">!</div><h2>Excluir memória?</h2><p>Esta ação remove os metadados, o Markdown e o vetor associado.</p>
+    <div><button class="ghost-button" id="cancel-delete">Cancelar</button><button class="danger-button" id="confirm-delete">Excluir permanentemente</button></div>
+  </dialog>
+
+  <div class="toast-region" id="toast-region" aria-live="polite"></div>
+  <script src="/assets/app.js?v=20260804-9" defer></script>
+  <script src="/assets/graph.js?v=20260804-4" defer></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+[Unit]
+Description=Create a consistent Arkan Vault backup
+RequiresMountsFor=/opt/arkan-vault /var/backups/arkan-vault
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/arkan-vault-backup
+ExecStartPost=/usr/local/sbin/arkan-vault-verify-backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

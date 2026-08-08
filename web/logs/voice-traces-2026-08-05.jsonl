@@ -1,0 +1,2 @@
+{"trace_id": "validation", "generation_id": "validation", "source": "test", "metrics": {"ok": 1}}
+{"trace_id": "validation-tts", "generation_id": "validation-tts", "source": "voice-backend", "span": "tts", "metrics": {"first_audio_bytes_ms": 1924, "total_ms": 2396}, "metadata": {"provider": "edge", "voice": "pt-BR-FranciscaNeural", "sequence": 0, "words": 3, "chars": 17}}

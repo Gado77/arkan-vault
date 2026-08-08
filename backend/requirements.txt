@@ -1,0 +1,23 @@
+# Core dependencies
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+pydantic-settings==2.5.2
+
+# Database
+sqlalchemy==2.0.35
+
+# Vector DB
+chromadb==0.5.15
+onnxruntime==1.28.0
+posthog==3.7.0
+
+# Native runtime required by ONNX Runtime and PyTorch on Windows
+msvc-runtime==14.44.35112; sys_platform == "win32"
+
+# Embeddings (local, no API key needed)
+sentence-transformers==3.1.1
+
+# Utilities
+python-dotenv==1.0.1
+python-multipart==0.0.20
