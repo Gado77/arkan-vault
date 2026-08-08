@@ -112,10 +112,13 @@ class MemoryService:
     # ── Update ────────────────────────────────────────────────────────────────
 
     def update(self, id: str, data: MemoryUpdate) -> MemoryObject | None:
-        if self.metadata.get(id) is None:
+        obj_before = self.metadata.get(id)
+        if obj_before is None:
             return None
 
         updates: dict = {}
+        old_content = obj_before.content
+        markdown_updated = False
 
         if data.title is not None:
             updates["title"] = data.title
@@ -124,6 +127,7 @@ class MemoryService:
         if data.content is not None:
             updates["content"] = data.content
             self.markdown.save(id, data.content)
+            markdown_updated = True
         if data.project is not None:
             updates["project"] = data.project
         if data.tags is not None:
@@ -134,9 +138,17 @@ class MemoryService:
             updates["context"] = data.context
 
         if not updates:
-            return self.metadata.get(id)
+            return obj_before
 
-        obj = self.metadata.update(id, updates)
+        try:
+            obj = self.metadata.update(id, updates)
+        except Exception as e:
+            if markdown_updated:
+                if old_content is not None:
+                    self.markdown.save(id, old_content)
+                else:
+                    self.markdown.delete(id)
+            raise e
 
         if obj:
             bus.publish(MemoryUpdated(
@@ -152,8 +164,23 @@ class MemoryService:
     # ── Delete ────────────────────────────────────────────────────────────────
 
     def delete(self, id: str) -> bool:
-        self.markdown.delete(id)
-        deleted = self.metadata.delete(id)
+        obj_before = self.metadata.get(id)
+        if not obj_before:
+            return False
+
+        old_content = obj_before.content
+        markdown_deleted = False
+
+        if old_content is not None:
+            self.markdown.delete(id)
+            markdown_deleted = True
+
+        try:
+            deleted = self.metadata.delete(id)
+        except Exception as e:
+            if markdown_deleted:
+                self.markdown.save(id, old_content)
+            raise e
 
         if deleted:
             bus.publish(MemoryDeleted(memory_id=id))

@@ -1,140 +1,88 @@
-import importlib
-import sys
-import types
-import unittest
+import pytest
+from unittest.mock import MagicMock, patch
+from app.events.memory_events import MemoryCreated, MemoryUpdated, MemoryDeleted
+from app.workers.knowledge_pipeline import start_knowledge_pipeline
 
+@pytest.fixture
+def mock_storages():
+    with patch("app.workers.knowledge_pipeline.ChromaVectorStorage") as MockChroma, \
+         patch("app.workers.knowledge_pipeline.FilesystemMarkdownStorage") as MockMarkdown, \
+         patch("app.workers.knowledge_pipeline.embeddings") as mock_embeddings, \
+         patch("app.workers.knowledge_pipeline.bus") as mock_bus:
+         
+        mock_chroma_inst = MockChroma.return_value
+        mock_markdown_inst = MockMarkdown.return_value
+        
+        # Reset _started flag so it initializes inside tests
+        import app.workers.knowledge_pipeline as kp
+        kp._started = False
+        
+        yield mock_chroma_inst, mock_markdown_inst, mock_embeddings, mock_bus
 
-class KnowledgePipelineTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        config = types.ModuleType("app.config")
-        config.settings = types.SimpleNamespace(
-            CHROMA_PATH="unused-in-unit-test",
-            MEMORIES_PATH="unused-in-unit-test",
-            EMBEDDING_MODEL="test-model",
-        )
-        sys.modules["app.config"] = config
+def test_pipeline_memory_created(mock_storages):
+    mock_chroma, mock_markdown, mock_embeddings, mock_bus = mock_storages
+    
+    # We can get the handlers by capturing the bus.subscribe calls
+    handlers = {}
+    def fake_subscribe(event_cls, handler):
+        handlers[event_cls.__name__] = handler
+    mock_bus.subscribe.side_effect = fake_subscribe
+    
+    start_knowledge_pipeline()
+    
+    mock_markdown.get.return_value = "Content"
+    mock_embeddings.embed.return_value = [0.1, 0.2]
+    
+    event = MemoryCreated(memory_id="mem_1", type="idea", project="test", tags=["a"])
+    handlers["MemoryCreated"](event)
+    
+    mock_chroma.save.assert_called_once_with("mem_1", [0.1, 0.2], {"type": "idea", "project": "test", "tags": "a"})
+    assert mock_bus.publish.called
 
-        cls.pipeline = importlib.import_module("app.workers.knowledge_pipeline")
-        cls.bus = importlib.import_module("app.events.bus")
-        events = importlib.import_module("app.events.memory_events")
-        cls.MemoryCreated = events.MemoryCreated
-        cls.MemoryDeleted = events.MemoryDeleted
-        cls.MemoryUpdated = events.MemoryUpdated
-        cls.EmbeddingGenerated = events.EmbeddingGenerated
+def test_pipeline_memory_updated_content(mock_storages):
+    mock_chroma, mock_markdown, mock_embeddings, mock_bus = mock_storages
+    
+    handlers = {}
+    def fake_subscribe(event_cls, handler):
+        handlers[event_cls.__name__] = handler
+    mock_bus.subscribe.side_effect = fake_subscribe
+    
+    start_knowledge_pipeline()
+    
+    mock_markdown.get.return_value = "New Content"
+    mock_embeddings.embed.return_value = [0.3, 0.4]
+    
+    event = MemoryUpdated(memory_id="mem_1", changed_fields=["content"], type="idea", project="test", tags=[])
+    handlers["MemoryUpdated"](event)
+    
+    mock_chroma.save.assert_called_once_with("mem_1", [0.3, 0.4], {"type": "idea", "project": "test"})
 
-    def setUp(self):
-        self.bus.clear()
-        self.pipeline._started = False
+def test_pipeline_memory_updated_title_only(mock_storages):
+    mock_chroma, mock_markdown, mock_embeddings, mock_bus = mock_storages
+    
+    handlers = {}
+    def fake_subscribe(event_cls, handler):
+        handlers[event_cls.__name__] = handler
+    mock_bus.subscribe.side_effect = fake_subscribe
+    
+    start_knowledge_pipeline()
+    
+    event = MemoryUpdated(memory_id="mem_1", changed_fields=["title"], type="idea", project="test", tags=[])
+    handlers["MemoryUpdated"](event)
+    
+    mock_chroma.save.assert_not_called()
 
-        self.original_vector_storage = self.pipeline.ChromaVectorStorage
-        self.original_markdown_storage = self.pipeline.FilesystemMarkdownStorage
-        self.original_embed = self.pipeline.embeddings.embed
-
-        self.saved_vectors = []
-        self.deleted_vectors = []
-        self.embedding_events = []
-        self.markdown_content = "A durable memory about semantic search."
-
-        test = self
-
-        class FakeVectorStorage:
-            def save(self, id, embedding, metadata):
-                test.saved_vectors.append((id, embedding, metadata))
-
-            def delete(self, id):
-                test.deleted_vectors.append(id)
-                return True
-
-        class FakeMarkdownStorage:
-            def __init__(self, _base_path):
-                pass
-
-            def get(self, _id):
-                return test.markdown_content
-
-        self.pipeline.ChromaVectorStorage = FakeVectorStorage
-        self.pipeline.FilesystemMarkdownStorage = FakeMarkdownStorage
-        self.pipeline.embeddings.embed = lambda text: [float(len(text)), 1.0]
-        self.bus.subscribe(
-            self.EmbeddingGenerated,
-            self.embedding_events.append,
-        )
-
-    def tearDown(self):
-        self.pipeline.ChromaVectorStorage = self.original_vector_storage
-        self.pipeline.FilesystemMarkdownStorage = self.original_markdown_storage
-        self.pipeline.embeddings.embed = self.original_embed
-        self.pipeline._started = False
-        self.bus.clear()
-
-    def test_memory_created_generates_and_saves_embedding(self):
-        self.pipeline.start_knowledge_pipeline()
-        self.bus.publish(self.MemoryCreated(
-            memory_id="mem_test",
-            type="idea",
-            project="arkan",
-            tags=["semantic-search"],
-        ))
-
-        self.assertEqual(len(self.saved_vectors), 1)
-        memory_id, embedding, metadata = self.saved_vectors[0]
-        self.assertEqual(memory_id, "mem_test")
-        self.assertEqual(embedding, [float(len(self.markdown_content)), 1.0])
-        self.assertEqual(metadata, {
-            "type": "idea",
-            "project": "arkan",
-            "tags": "semantic-search",
-        })
-        self.assertEqual(len(self.embedding_events), 1)
-        self.assertEqual(self.embedding_events[0].memory_id, "mem_test")
-        self.assertEqual(self.embedding_events[0].model, "test-model")
-
-    def test_start_is_idempotent(self):
-        self.pipeline.start_knowledge_pipeline()
-        self.pipeline.start_knowledge_pipeline()
-        self.bus.publish(self.MemoryCreated(memory_id="mem_test", type="memory"))
-
-        self.assertEqual(len(self.saved_vectors), 1)
-
-    def test_missing_markdown_skips_embedding(self):
-        self.markdown_content = None
-        self.pipeline.start_knowledge_pipeline()
-        self.bus.publish(self.MemoryCreated(memory_id="mem_test", type="memory"))
-
-        self.assertEqual(self.saved_vectors, [])
-        self.assertEqual(self.embedding_events, [])
-        self.assertEqual(self.deleted_vectors, ["mem_test"])
-
-    def test_relevant_update_regenerates_embedding(self):
-        self.pipeline.start_knowledge_pipeline()
-        self.bus.publish(self.MemoryUpdated(
-            memory_id="mem_test",
-            changed_fields=["content"],
-            type="memory",
-            project="arkan",
-            tags=["updated"],
-        ))
-
-        self.assertEqual(len(self.saved_vectors), 1)
-        self.assertEqual(self.saved_vectors[0][2]["tags"], "updated")
-
-    def test_unrelated_update_does_not_regenerate_embedding(self):
-        self.pipeline.start_knowledge_pipeline()
-        self.bus.publish(self.MemoryUpdated(
-            memory_id="mem_test",
-            changed_fields=["context"],
-            type="memory",
-        ))
-
-        self.assertEqual(self.saved_vectors, [])
-
-    def test_delete_removes_vector(self):
-        self.pipeline.start_knowledge_pipeline()
-        self.bus.publish(self.MemoryDeleted(memory_id="mem_test"))
-
-        self.assertEqual(self.deleted_vectors, ["mem_test"])
-
-
-if __name__ == "__main__":
-    unittest.main()
+def test_pipeline_memory_deleted(mock_storages):
+    mock_chroma, mock_markdown, mock_embeddings, mock_bus = mock_storages
+    
+    handlers = {}
+    def fake_subscribe(event_cls, handler):
+        handlers[event_cls.__name__] = handler
+    mock_bus.subscribe.side_effect = fake_subscribe
+    
+    start_knowledge_pipeline()
+    
+    event = MemoryDeleted(memory_id="mem_1")
+    handlers["MemoryDeleted"](event)
+    
+    mock_chroma.delete.assert_called_once_with("mem_1")

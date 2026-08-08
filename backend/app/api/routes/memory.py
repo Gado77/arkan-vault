@@ -94,6 +94,7 @@ def get_memory(id: str, service: MemoryService = Depends(get_memory_service)):
 
 
 @router.put("/{id}", response_model=MemoryResponse)
+@router.patch("/{id}", response_model=MemoryResponse)
 def update_memory(
     id: str,
     data: MemoryUpdate,
