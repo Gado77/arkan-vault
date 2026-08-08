@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { updateDeleteActionDecision } from "@/lib/arkan/memory-state";
+import { confirmDeleteAction } from "@/lib/arkan/memory-state";
 
 export async function POST(req: Request) {
   try {
@@ -10,7 +10,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
     }
 
-    const updated = updateDeleteActionDecision(actionId, confirmed ? "confirmed" : "cancelled");
+    const updated = confirmDeleteAction({
+      actionId,
+      logicalSessionId: sessionId,
+      confirmed
+    });
     
     if (!updated) {
        return NextResponse.json({ ok: false, error: "action_not_found_or_expired" });

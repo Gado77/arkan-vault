@@ -11,8 +11,9 @@ interface ArkanCapabilities {
   contractCompatible: boolean;
   searchAvailable: boolean;
   hasGet: boolean;
-  hasPatch: boolean;
   hasDelete: boolean;
+  updateMethod: "PATCH" | "PUT" | null;
+  itemPath: string | null;
 }
 
 declare global {
@@ -28,8 +29,9 @@ const fallbackCaps: ArkanCapabilities = {
   contractCompatible: false,
   searchAvailable: false,
   hasGet: false,
-  hasPatch: false,
-  hasDelete: false
+  hasDelete: false,
+  updateMethod: null,
+  itemPath: null
 };
 
 export async function getCapabilities(): Promise<ArkanCapabilities> {
@@ -55,22 +57,30 @@ export async function getCapabilities(): Promise<ArkanCapabilities> {
     const searchAvailable = !!paths[ARKAN_PATHS.search];
     const memoriesAvailable = !!paths[ARKAN_PATHS.memories];
     
-    let hasGet = false, hasPatch = false, hasDelete = false;
+    let hasGet = false, hasPatch = false, hasPut = false, hasDelete = false;
+    let itemPath: string | null = null;
+    
     for (const p of Object.keys(paths)) {
+      // O OpenAPI do FastAPI no Arkan exporta o path com {id} em vez de {memory_id}
       if (p.match(/^\/api\/v1\/memories\/\{[a-zA-Z0-9_-]+\}$/)) {
+        itemPath = p;
         hasGet = !!paths[p].get;
         hasPatch = !!paths[p].patch;
+        hasPut = !!paths[p].put;
         hasDelete = !!paths[p].delete;
         break;
       }
     }
     
+    const updateMethod = hasPatch ? "PATCH" : (hasPut ? "PUT" : null);
+
     const caps: ArkanCapabilities = {
       contractCompatible: searchAvailable && memoriesAvailable,
       searchAvailable,
       hasGet,
-      hasPatch,
-      hasDelete
+      hasDelete,
+      updateMethod,
+      itemPath
     };
 
     global.arkanCapabilityCache = {
@@ -84,9 +94,9 @@ export async function getCapabilities(): Promise<ArkanCapabilities> {
   }
 }
 
-export async function checkOpenApi(operation: "get" | "patch" | "delete") {
+export async function checkOpenApi(operation: "get" | "update" | "delete") {
   const caps = await getCapabilities();
   if (operation === "get" && !caps.hasGet) throw new Error("operation_unsupported");
-  if (operation === "patch" && !caps.hasPatch) throw new Error("operation_unsupported");
+  if (operation === "update" && !caps.updateMethod) throw new Error("operation_unsupported");
   if (operation === "delete" && !caps.hasDelete) throw new Error("operation_unsupported");
 }

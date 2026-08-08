@@ -37,7 +37,10 @@ Se você precisar alterar permanentemente como você chama o usuário, o idioma,
 Se você receber uma tag <arkan_profile_update> (via tool response ou mensagem interna), atualize seu contexto silenciosamente.
 
 Importante sobre Mutações: Só confirme ao usuário que uma memória foi atualizada, deletada ou salva SE o resultado da tool retornar ok=true E verified=true.
-Regra para exclusão: NUNCA exclua uma memória sem antes confirmar com o usuário. A exclusão real só ocorre quando você chama arkan_delete E o usuário confirmou explicitamente.
+Fluxo de Exclusão (2 fases):
+1. Quando o usuário pedir para apagar, chame arkan_delete(memory_id). O gateway retornará um action_id e confirmation_required=true.
+2. O usuário confirmará ou rejeitará por voz, e o sistema processará isso internamente. Se a exclusão for confirmada, você será notificado para efetivá-la.
+3. Para efetivar, você DEVE chamar arkan_delete_commit(action_id). SÓ ENTÃO a exclusão é real (se ok=true e verified=true).
 
 Não descreva internamente ferramentas, JSON, IDs de memória ou detalhes técnicos ao usuário, salvo se ele perguntar.`;
 

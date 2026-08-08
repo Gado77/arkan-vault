@@ -472,3 +472,18 @@ test("audio: fresh token fetched on every reconnect (source check)", async () =>
   assert.match(openConnSrc, /\/api\/gemini-live\/token/, "token must be fetched inside openConnection");
 });
 
+test("tool declarations: ALL ARKAN_TOOL_DECLARATIONS must exist in ARKAN_SERVER_TOOL_NAMES allowlist", async () => {
+  const { ARKAN_TOOL_DECLARATIONS } = await import("../lib/gemini-live/constants");
+  const { ARKAN_SERVER_TOOL_NAMES } = await import("../lib/arkan/tool-names");
+  
+  const allowlist = new Set(ARKAN_SERVER_TOOL_NAMES);
+  
+  for (const tool of ARKAN_TOOL_DECLARATIONS) {
+    assert.ok(
+      allowlist.has(tool.name as any),
+      `Tool '${tool.name}' is declared to Gemini but is missing from the server allowlist (ARKAN_SERVER_TOOL_NAMES)`
+    );
+  }
+});
+
+

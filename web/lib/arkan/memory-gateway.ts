@@ -7,8 +7,9 @@
  */
 
 import { ARKAN_BASE, ARKAN_PATHS, logDiagnostic, ArkanMemoryResult } from "@/lib/arkan-client";
-import { getJournalEntry, setJournalEntry, ToolResult, createDeleteAction, getDeleteAction, updateDeleteActionDecision, findPendingDeleteActionForMemory, removeDeleteAction } from "./memory-state";
+import { getJournalEntry, setJournalEntry, ToolResult, createDeleteAction, getDeleteAction, confirmDeleteAction, findPendingDeleteActionForMemory, removeDeleteAction } from "./memory-state";
 import { syncBootstrapCache } from "./bootstrap-cache";
+import { getCapabilities } from "./capability-registry";
 
 export async function arkanRecall(query: string, limit: number): Promise<ArkanMemoryResult[]> {
   const start = performance.now();
@@ -247,6 +248,11 @@ export async function arkanUpdate(id: string, patch: any, sessionId: string, cal
   const cachedResult = getJournalEntry(sessionId, callId);
   if (cachedResult) return cachedResult;
 
+  const caps = await getCapabilities();
+  if (!caps.updateMethod) {
+    return { ok: false, verified: false, operation: "update", error: { code: "operation_unsupported" } };
+  }
+
   const start = performance.now();
   const path = `${ARKAN_PATHS.memories}/${id}`;
   const timeoutMs = 2000;
@@ -256,7 +262,7 @@ export async function arkanUpdate(id: string, patch: any, sessionId: string, cal
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     const res = await fetch(`${ARKAN_BASE}${path}`, {
-      method: "PATCH",
+      method: caps.updateMethod,
       headers: { "content-type": "application/json" },
       body: JSON.stringify(patch),
       signal: controller.signal,
@@ -266,11 +272,11 @@ export async function arkanUpdate(id: string, patch: any, sessionId: string, cal
     const elapsedMs = performance.now() - start;
 
     if (!res.ok) {
-      logDiagnostic(path, "PATCH", res.status, elapsedMs, "http_error");
+      logDiagnostic(path, caps.updateMethod, res.status, elapsedMs, "http_error");
       return { ok: false, verified: false, operation: "update", error: { code: "memory_unavailable" } };
     }
     
-    logDiagnostic(path, "PATCH", res.status, elapsedMs, "none");
+    logDiagnostic(path, caps.updateMethod, res.status, elapsedMs, "none");
 
     // 2. Read-After-Write Verification
     const verification = await arkanGet(id);
@@ -320,7 +326,7 @@ export async function arkanUpdate(id: string, patch: any, sessionId: string, cal
 
   } catch (err: any) {
     const elapsedMs = performance.now() - start;
-    logDiagnostic(path, "PATCH", 0, elapsedMs, err.name === "AbortError" ? "timeout" : "network_error");
+    logDiagnostic(path, caps.updateMethod, 0, elapsedMs, err.name === "AbortError" ? "timeout" : "network_error");
     return { ok: false, verified: false, operation: "update", error: { code: "memory_unavailable" } };
   }
 }
@@ -426,74 +432,108 @@ export async function commitDelete(actionId: string, logicalSessionId: string, c
   }
 }
 
+export async function resolveCanonicalProfile(): Promise<{ profile: ArkanMemoryResult | null, error: string | null }> {
+  const memories = await arkanList({ project: "hermes-profile", tags: ["always-context"] }, 5000);
+  const profiles = memories.filter((m: any) => m.title === "Hermes — Perfil Base do Usuário" && m.tags.includes("profile-base"));
+  
+  if (profiles.length === 0) {
+    return { profile: null, error: "profile_not_found" };
+  }
+  if (profiles.length > 1) {
+    return { profile: null, error: "profile_conflict" };
+  }
+  return { profile: profiles[0], error: null };
+}
+
+export function parseProfileBase(content: string) {
+  const v1Match = content.match(/<!-- HERMES_PROFILE_V1_START -->([\s\S]*?)<!-- HERMES_PROFILE_V1_END -->/);
+  if (v1Match) {
+    try {
+      const parsed = JSON.parse(v1Match[1].trim());
+      return {
+        name: parsed.name || "",
+        preferred_name: parsed.preferred_name || "",
+        language: parsed.language || "",
+        conversation_style: parsed.conversation_style || "",
+        preferences: Array.isArray(parsed.preferences) ? parsed.preferences : []
+      };
+    } catch {
+      // fallback
+    }
+  }
+
+  const lines = content.split('\n');
+  let name = "", preferred = "", lang = "", style = "";
+  let prefs: string[] = [];
+
+  for (const line of lines) {
+    const match = line.match(/^([^:]+):\s*(.*)$/);
+    if (match) {
+      const key = match[1].trim();
+      const val = match[2].trim();
+      if (key === "Nome") name = val;
+      else if (key === "Como chamar") preferred = val;
+      else if (key === "Idioma") lang = val;
+      else if (key === "Estilo") style = val;
+    }
+    if (line.trim().startsWith("- ")) {
+      prefs.push(line.replace("- ", "").trim());
+    }
+  }
+
+  return { name, preferred_name: preferred, language: lang, conversation_style: style, preferences: prefs };
+}
+
+export function renderProfileV1(profileData: any): string {
+  const jsonStr = JSON.stringify({
+    schema_version: 1,
+    name: profileData.name || "",
+    preferred_name: profileData.preferred_name || "",
+    language: profileData.language || "",
+    conversation_style: profileData.conversation_style || "",
+    preferences: profileData.preferences || []
+  }, null, 2);
+
+  return `<!-- HERMES_PROFILE_V1_START -->\n${jsonStr}\n<!-- HERMES_PROFILE_V1_END -->`;
+}
+
 export async function updateProfile(patch: any, sessionId: string, callId: string): Promise<ToolResult> {
   const cachedResult = getJournalEntry(sessionId, callId);
   if (cachedResult) return cachedResult;
 
-  // 1. Fetch existing profile
-  const memories = await arkanList({ project: "hermes-profile", tags: ["always-context"] }, 5000);
-  let profileMem = memories.find((m: any) => m.title === "Hermes — Perfil Base do Usuário" && m.tags.includes("profile-base"));
-
-  // 2. Parse current content if exists
-  let name = "";
-  let preferred = "";
-  let lang = "";
-  let style = "";
-  let prefs: string[] = [];
-
-  if (profileMem) {
-    const lines = profileMem.content.split('\n');
-    for (const line of lines) {
-      const match = line.match(/^([^:]+):\s*(.*)$/);
-      if (match) {
-        const key = match[1].trim();
-        const val = match[2].trim();
-        if (key === "Nome") name = val;
-        else if (key === "Como chamar") preferred = val;
-        else if (key === "Idioma") lang = val;
-        else if (key === "Estilo") style = val;
-      }
-      if (line.trim().startsWith("- ")) {
-        prefs.push(line.replace("- ", "").trim());
-      }
-    }
+  const { profile: profileMem, error: resolveError } = await resolveCanonicalProfile();
+  
+  if (resolveError === "profile_conflict") {
+    return { ok: false, verified: false, operation: "profile_update", error: { code: "profile_conflict" } };
   }
 
-  // 3. Apply patch
-  if (patch.name !== undefined) name = patch.name;
-  if (patch.preferred_name !== undefined) preferred = patch.preferred_name;
-  if (patch.language !== undefined) lang = patch.language;
-  if (patch.conversation_style !== undefined) style = patch.conversation_style;
+  let currentData = { name: "", preferred_name: "", language: "", conversation_style: "", preferences: [] as string[] };
+  if (profileMem) {
+    currentData = parseProfileBase(profileMem.content);
+  }
+
+  if (patch.name !== undefined) currentData.name = patch.name;
+  if (patch.preferred_name !== undefined) currentData.preferred_name = patch.preferred_name;
+  if (patch.language !== undefined) currentData.language = patch.language;
+  if (patch.conversation_style !== undefined) currentData.conversation_style = patch.conversation_style;
   
   if (patch.preferences && Array.isArray(patch.preferences)) {
     for (const p of patch.preferences) {
-      if (!prefs.includes(p)) prefs.push(p);
+      if (!currentData.preferences.includes(p)) currentData.preferences.push(p);
     }
   }
 
-  // 4. Generate new content
-  let newContent = "";
-  if (name) newContent += `Nome: ${name}\n`;
-  if (preferred) newContent += `Como chamar: ${preferred}\n`;
-  if (lang) newContent += `Idioma: ${lang}\n`;
-  if (style) newContent += `Estilo: ${style}\n`;
-  if (prefs.length > 0) {
-    newContent += `Preferências:\n`;
-    for (const p of prefs) {
-      newContent += `- ${p}\n`;
-    }
-  }
+  const newContent = renderProfileV1(currentData);
 
   const payload = {
     title: "Hermes — Perfil Base do Usuário",
     summary: "Configurações persistentes de personalidade e identidade do usuário.",
-    content: newContent.trim(),
+    content: newContent,
     project: "hermes-profile",
     tags: ["always-context", "profile-base"]
   };
 
   let result: ToolResult;
-  // 5. Write (Create or Update)
   if (profileMem) {
     result = await arkanUpdate(profileMem.id, { content: payload.content }, sessionId, callId + "_upd");
   } else {
@@ -501,14 +541,13 @@ export async function updateProfile(patch: any, sessionId: string, callId: strin
   }
 
   if (result.ok && result.verified) {
-    // 6. Sync Cache
     await syncBootstrapCache();
     
     const finalResult = {
       ok: true,
       verified: true,
       operation: "profile_update",
-      data: { updated: true, profile: { name, preferred, lang, style, prefs } }
+      data: { updated: true, profile: currentData }
     };
     setJournalEntry(sessionId, callId, finalResult);
     return finalResult;

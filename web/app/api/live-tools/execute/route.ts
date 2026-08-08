@@ -9,15 +9,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { arkanRecall, arkanGet, arkanList, arkanCreate, arkanUpdate, prepareDelete, commitDelete, updateProfile } from "@/lib/arkan/memory-gateway";
 
-const TOOL_ALLOWLIST = new Set([
-  "arkan_recall", 
-  "arkan_remember",
-  "arkan_get",
-  "arkan_list",
-  "arkan_update",
-  "arkan_delete",
-  "arkan_profile_update"
-]);
+import { ARKAN_SERVER_TOOL_NAMES } from "@/lib/arkan/tool-names";
+
+const TOOL_ALLOWLIST = new Set(ARKAN_SERVER_TOOL_NAMES);
 const MAX_PAYLOAD_CHARS = 5000;
 const RECALL_LIMIT_MAX = 5;
 const RECALL_LIMIT_DEFAULT = 4;
@@ -60,7 +54,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!isUUID(sessionId)) return NextResponse.json({ error: "Invalid sessionId" }, { status: 400 });
   if (!isString(callId)) return NextResponse.json({ error: "Invalid callId" }, { status: 400 });
   if (!isString(name)) return NextResponse.json({ error: "Invalid name" }, { status: 400 });
-  if (!TOOL_ALLOWLIST.has(name)) return NextResponse.json({ error: "Unknown tool" }, { status: 400 });
+  if (!TOOL_ALLOWLIST.has(name as any)) return NextResponse.json({ error: "Unknown tool" }, { status: 400 });
   if (typeof args !== "object" || args === null || Array.isArray(args))
     return NextResponse.json({ error: "Invalid args" }, { status: 400 });
 

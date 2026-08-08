@@ -7,13 +7,20 @@
  * Restarts clear the state.
  */
 
-export interface ToolResult {
+export interface ToolResult<T = any> {
   ok: boolean;
   verified: boolean;
   operation: string;
-  data?: any;
+  data?: T;
   error?: { code: string };
   diagnostics?: any;
+}
+
+export interface DeletePrepareData {
+  confirmation_required: true;
+  action_id: string;
+  memory_id: string;
+  title: string;
 }
 
 export interface DeleteAction {
@@ -105,14 +112,28 @@ export function findPendingDeleteActionForMemory(logicalSessionId: string, memor
   return null;
 }
 
-export function updateDeleteActionDecision(actionId: string, decision: "confirmed" | "cancelled"): boolean {
+export function confirmDeleteAction(params: { actionId: string; logicalSessionId: string; confirmed: boolean }): boolean {
+  const { actionId, logicalSessionId, confirmed } = params;
   const action = getDeleteAction(actionId);
+  
   if (!action) return false;
-  action.decision = decision;
-  if (decision === "cancelled") {
-    // Immediate removal on cancel
+  if (action.logicalSessionId !== logicalSessionId) return false;
+  
+  if (action.decision === "cancelled") {
+    return false; // cannot go back to confirmed if already cancelled
+  }
+
+  // Idempotency: if it's already confirmed and they ask to confirm again, it's fine.
+  if (action.decision === "confirmed" && confirmed) {
+    return true;
+  }
+  
+  action.decision = confirmed ? "confirmed" : "cancelled";
+  
+  if (!confirmed) {
     global.arkanDeleteActions.delete(actionId);
   }
+  
   return true;
 }
 

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert";
 import { arkanList, arkanRecall, arkanGet, arkanCreate, arkanUpdate, prepareDelete, commitDelete } from "../../lib/arkan/memory-gateway";
-import { getJournalEntry, setJournalEntry, getDeleteAction, updateDeleteActionDecision } from "../../lib/arkan/memory-state";
+import { getJournalEntry, setJournalEntry, getDeleteAction, confirmDeleteAction } from "../../lib/arkan/memory-state";
 
 test("Memory Gateway - READ Operations", async (t) => {
   // Mock global fetch for basic tests
@@ -132,7 +132,7 @@ test("Memory Gateway - READ Operations", async (t) => {
     const actionId = prep.data.action_id;
 
     // Simulate confirmation via confirm-delete route
-    const confirmed = updateDeleteActionDecision(actionId, "confirmed");
+    const confirmed = confirmDeleteAction({ actionId, logicalSessionId: session, confirmed: true });
     assert.strictEqual(confirmed, true);
 
     const commit = await commitDelete(actionId, session, callId);
