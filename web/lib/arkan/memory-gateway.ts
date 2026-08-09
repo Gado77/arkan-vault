@@ -6,10 +6,11 @@
  * Implements strict post-condition verification (Read-After-Write) and idempotency.
  */
 
-import { ARKAN_BASE, ARKAN_PATHS, logDiagnostic, ArkanMemoryResult } from "@/lib/arkan-client";
+import { ARKAN_BASE, ARKAN_PATHS, logDiagnostic, ArkanMemoryResult, isTimeoutError } from "@/lib/arkan-client";
 import { getJournalEntry, setJournalEntry, ToolResult, createDeleteAction, getDeleteAction, confirmDeleteAction, findPendingDeleteActionForMemory, removeDeleteAction } from "./memory-state";
 import { syncBootstrapCache } from "./bootstrap-cache";
 import { getCapabilities } from "./capability-registry";
+import { ARKAN_TIMEOUTS } from "./timeouts";
 
 export async function arkanRecall(query: string, limit: number): Promise<ArkanMemoryResult[]> {
   const start = performance.now();
@@ -63,12 +64,13 @@ export async function arkanRecall(query: string, limit: number): Promise<ArkanMe
   }
 }
 
-export async function arkanGet(id: string): Promise<ArkanMemoryResult | null> {
+export async function arkanGet(id: string, options?: { timeoutMs?: number }): Promise<ArkanMemoryResult | null> {
   const start = performance.now();
   const path = `${ARKAN_PATHS.memories}/${id}`;
+  const timeoutMs = options?.timeoutMs ?? ARKAN_TIMEOUTS.read;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const res = await fetch(`${ARKAN_BASE}${path}`, { signal: controller.signal });
@@ -108,7 +110,7 @@ export async function arkanGet(id: string): Promise<ArkanMemoryResult | null> {
   }
 }
 
-export async function arkanList(filters: any, timeoutMs: number = 3000): Promise<ArkanMemoryResult[]> {
+export async function arkanList(filters: any, timeoutMs: number = ARKAN_TIMEOUTS.search): Promise<ArkanMemoryResult[]> {
   const start = performance.now();
   
   const params = new URLSearchParams();
@@ -171,7 +173,7 @@ export async function arkanCreate(memory: any, sessionId: string, callId: string
 
   const start = performance.now();
   const path = ARKAN_PATHS.memories;
-  const timeoutMs = 2000;
+  const timeoutMs = ARKAN_TIMEOUTS.create;
 
   try {
     const controller = new AbortController();
@@ -201,7 +203,7 @@ export async function arkanCreate(memory: any, sessionId: string, callId: string
     }
 
     // 2. Read-After-Write Verification
-    const verification = await arkanGet(newId);
+    const verification = await arkanGet(newId, { timeoutMs: ARKAN_TIMEOUTS.verificationRead });
     if (!verification) {
       const result: ToolResult = { 
         ok: false, 
@@ -238,8 +240,19 @@ export async function arkanCreate(memory: any, sessionId: string, callId: string
 
   } catch (err: any) {
     const elapsedMs = performance.now() - start;
-    logDiagnostic(path, "POST", 0, elapsedMs, err.name === "AbortError" ? "timeout" : "network_error");
-    return { ok: false, verified: false, operation: "create", error: { code: "memory_unavailable" } };
+    const isTimeout = isTimeoutError(err);
+    logDiagnostic(path, "POST", 0, elapsedMs, isTimeout ? "timeout" : "network_error");
+    
+    const result: ToolResult = {
+      ok: false,
+      verified: false,
+      operation: "create",
+      error: { code: isTimeout ? "mutation_outcome_unknown" : "memory_unavailable" }
+    };
+    
+    // For CREATE, we cache the unknown outcome to prevent retry
+    setJournalEntry(sessionId, callId, result);
+    return result;
   }
 }
 
@@ -255,7 +268,7 @@ export async function arkanUpdate(id: string, patch: any, sessionId: string, cal
 
   const start = performance.now();
   const path = `${ARKAN_PATHS.memories}/${id}`;
-  const timeoutMs = 2000;
+  const timeoutMs = ARKAN_TIMEOUTS.update;
 
   try {
     const controller = new AbortController();
@@ -279,7 +292,7 @@ export async function arkanUpdate(id: string, patch: any, sessionId: string, cal
     logDiagnostic(path, caps.updateMethod, res.status, elapsedMs, "none");
 
     // 2. Read-After-Write Verification
-    const verification = await arkanGet(id);
+    const verification = await arkanGet(id, { timeoutMs: ARKAN_TIMEOUTS.verificationRead });
     if (!verification) {
       const result: ToolResult = { 
         ok: false, 
@@ -326,7 +339,57 @@ export async function arkanUpdate(id: string, patch: any, sessionId: string, cal
 
   } catch (err: any) {
     const elapsedMs = performance.now() - start;
-    logDiagnostic(path, caps.updateMethod, 0, elapsedMs, err.name === "AbortError" ? "timeout" : "network_error");
+    const isTimeout = isTimeoutError(err);
+    logDiagnostic(path, caps.updateMethod, 0, elapsedMs, isTimeout ? "timeout" : "network_error");
+    
+    if (isTimeout) {
+      // 3. Bounded reconciliation for UPDATE
+      const checkMatch = (v: ArkanMemoryResult) => {
+        if (patch.title !== undefined && patch.title !== v.title) return false;
+        if (patch.summary !== undefined && patch.summary !== v.summary) return false;
+        if (patch.content !== undefined && patch.content !== v.content) return false;
+        if (patch.project !== undefined && patch.project !== v.project) return false;
+        if (patch.tags !== undefined) {
+          const pTags = [...patch.tags].sort();
+          const uTags = [...v.tags].sort();
+          if (pTags.join(",") !== uTags.join(",")) return false;
+        }
+        return true;
+      };
+
+      for (let i = 0; i < 3; i++) {
+        try {
+          const verification = await arkanGet(id, { timeoutMs: ARKAN_TIMEOUTS.verificationRead });
+          if (verification && checkMatch(verification)) {
+            const result: ToolResult = {
+              ok: true,
+              verified: true,
+              operation: "update",
+              data: { memory_id: id, saved: true, recoveredAfterTimeout: true },
+              diagnostics: { latencyMs: elapsedMs }
+            };
+            setJournalEntry(sessionId, callId, result);
+            return result;
+          }
+        } catch (e) {
+          // ignore verification read error during reconciliation
+        }
+        const backoffMs = i === 0 ? 500 : (i === 1 ? 1000 : 0);
+        if (backoffMs > 0) {
+          await new Promise(r => setTimeout(r, backoffMs));
+        }
+      }
+
+      const result: ToolResult = {
+        ok: false,
+        verified: false,
+        operation: "update",
+        error: { code: "mutation_outcome_unknown" }
+      };
+      setJournalEntry(sessionId, callId, result);
+      return result;
+    }
+
     return { ok: false, verified: false, operation: "update", error: { code: "memory_unavailable" } };
   }
 }
@@ -382,7 +445,7 @@ export async function commitDelete(actionId: string, logicalSessionId: string, c
   
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2000);
+    const timer = setTimeout(() => controller.abort(), ARKAN_TIMEOUTS.delete);
 
     const res = await fetch(`${ARKAN_BASE}${path}`, {
       method: "DELETE",
@@ -400,7 +463,7 @@ export async function commitDelete(actionId: string, logicalSessionId: string, c
     logDiagnostic(path, "DELETE", res.status, elapsedMs, "none");
 
     // 2. Verify Post-Condition: memory should no longer exist
-    const verification = await arkanGet(action.memoryId);
+    const verification = await arkanGet(action.memoryId, { timeoutMs: ARKAN_TIMEOUTS.verificationRead });
     if (verification) {
       const result: ToolResult = { 
         ok: false, 
@@ -427,13 +490,51 @@ export async function commitDelete(actionId: string, logicalSessionId: string, c
     return result;
   } catch (err: any) {
     const elapsedMs = performance.now() - start;
-    logDiagnostic(path, "DELETE", 0, elapsedMs, err.name === "AbortError" ? "timeout" : "network_error");
+    const isTimeout = isTimeoutError(err);
+    logDiagnostic(path, "DELETE", 0, elapsedMs, isTimeout ? "timeout" : "network_error");
+    
+    if (isTimeout) {
+      // 3. Bounded reconciliation for DELETE
+      for (let i = 0; i < 3; i++) {
+        try {
+          const verification = await arkanGet(action.memoryId, { timeoutMs: ARKAN_TIMEOUTS.verificationRead });
+          if (verification === null) {
+            removeDeleteAction(actionId);
+            const result: ToolResult = {
+              ok: true,
+              verified: true,
+              operation: "delete_commit",
+              data: { memory_id: action.memoryId, deleted: true, recoveredAfterTimeout: true },
+              diagnostics: { latencyMs: elapsedMs }
+            };
+            setJournalEntry(logicalSessionId, callId, result);
+            return result;
+          }
+        } catch (e) {
+          // ignore verification read error during reconciliation
+        }
+        const backoffMs = i === 0 ? 500 : (i === 1 ? 1000 : 0);
+        if (backoffMs > 0) {
+          await new Promise(r => setTimeout(r, backoffMs));
+        }
+      }
+
+      const result: ToolResult = {
+        ok: false,
+        verified: false,
+        operation: "delete_commit",
+        error: { code: "mutation_outcome_unknown" }
+      };
+      setJournalEntry(logicalSessionId, callId, result);
+      return result;
+    }
+
     return { ok: false, verified: false, operation: "delete_commit", error: { code: "memory_unavailable" } };
   }
 }
 
 export async function resolveCanonicalProfile(): Promise<{ profile: ArkanMemoryResult | null, error: string | null }> {
-  const memories = await arkanList({ project: "hermes-profile", tags: ["always-context"] }, 5000);
+  const memories = await arkanList({ project: "hermes-profile", tags: ["always-context"] }, ARKAN_TIMEOUTS.search);
   const profiles = memories.filter((m: any) => m.title === "Hermes — Perfil Base do Usuário" && m.tags.includes("profile-base"));
   
   if (profiles.length === 0) {

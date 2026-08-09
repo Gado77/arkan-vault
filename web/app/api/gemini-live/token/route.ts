@@ -5,8 +5,9 @@
 // exposed to the client.
 
 import { NextRequest, NextResponse } from "next/server";
+import { getGeminiApiKey } from "@/lib/server-env";
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
+export const runtime = "nodejs";
 const GEMINI_LIVE_MODEL =
   process.env.GEMINI_LIVE_MODEL ?? "gemini-3.1-flash-live-preview";
 
@@ -23,7 +24,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  if (!GEMINI_API_KEY) {
+  let apiKey: string;
+  try {
+    apiKey = getGeminiApiKey();
+  } catch (e) {
     return NextResponse.json(
       { error: "GEMINI_API_KEY not configured on server" },
       { status: 503 }
@@ -49,7 +53,7 @@ export async function POST(req: NextRequest) {
   let tokenData: Record<string, unknown>;
   try {
     const response = await fetch(
-      `${GEMINI_BASE}/ephemeralTokens?key=${GEMINI_API_KEY}`,
+      `${GEMINI_BASE}/ephemeralTokens?key=${apiKey}`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },

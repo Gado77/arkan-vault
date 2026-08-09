@@ -395,9 +395,11 @@ server.on("upgrade", (req, socket, head) => {
   const pathname = decodeURIComponent(new URL(req.url || "/", "http://localhost").pathname);
   if (pathname === "/api/wake-stream") {
     wss.handleUpgrade(req, socket, head, (ws) => {
+      console.log("[wake-bridge] browser connected");
+      console.log("[wake-bridge] tcp connecting 127.0.0.1:8766");
       const tcpClient = new Socket();
       tcpClient.connect(8766, "127.0.0.1", () => {
-        // Connected to Wake Word Python Daemon
+        console.log("[wake-bridge] tcp connected");
       });
 
       ws.on("message", (msg) => {
@@ -416,9 +418,18 @@ server.on("upgrade", (req, socket, head) => {
         }
       });
 
-      ws.on("close", () => tcpClient.destroy());
-      tcpClient.on("close", () => ws.close());
-      tcpClient.on("error", () => ws.close());
+      ws.on("close", () => {
+        console.log("[wake-bridge] browser closed");
+        tcpClient.destroy();
+      });
+      tcpClient.on("close", () => {
+        console.log("[wake-bridge] tcp closed");
+        ws.close();
+      });
+      tcpClient.on("error", (err) => {
+        console.log(`[wake-bridge] tcp error: ${err.code} ${err.message}`);
+        ws.close();
+      });
     });
   } else {
     // Drop unexpected WS upgrades

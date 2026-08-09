@@ -9,15 +9,14 @@ function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
+import { ARKAN_TIMEOUTS } from "./arkan/timeouts";
+
 const rawUrl = process.env.ARKAN_VAULT_URL;
 if (!rawUrl && process.env.NODE_ENV !== "development") {
   console.warn("[Arkan Vault] ARKAN_VAULT_URL is NOT set! Using localhost fallback in a non-development environment.");
 }
 
 export const ARKAN_BASE = normalizeBaseUrl(rawUrl ?? "http://127.0.0.1:8765");
-
-const ARKAN_HEALTH_TIMEOUT_MS = parseInt(process.env.ARKAN_HEALTH_TIMEOUT_MS || "2000", 10);
-const ARKAN_SEARCH_TIMEOUT_MS = parseInt(process.env.ARKAN_SEARCH_TIMEOUT_MS || "3000", 10);
 
 export const ARKAN_PATHS = {
   health: "/health",
@@ -44,6 +43,13 @@ export function logDiagnostic(path: string, method: string, status: number, elap
   console.log(
     `[Arkan Vault] ${method} ${path} | status=${status} | elapsed=${Math.round(elapsedMs)}ms | err=${errorType}`
   );
+}
+
+export function isTimeoutError(err: any): boolean {
+  if (!err) return false;
+  if (err.name === "AbortError" || err.name === "TimeoutError") return true;
+  if (err.code === "ECONNRESET" || err.code === "ETIMEDOUT") return true;
+  return false;
 }
 
 /**
@@ -103,7 +109,7 @@ export async function arkanCheckContract() {
 export async function arkanHealth(): Promise<{ isOnline: boolean, latencyMs: number }> {
   const start = performance.now();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ARKAN_HEALTH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), ARKAN_TIMEOUTS.health);
 
   try {
     const res = await fetch(`${ARKAN_BASE}${ARKAN_PATHS.health}`, { signal: controller.signal });
