@@ -131,6 +131,9 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
   
   const [bootstrapMetrics, setBootstrapMetrics] = useState<{ source: string, count: number, chars: number, ageMs: number } | null>(null);
   const pendingDeleteRef = useRef<{ actionId: string, memoryId: string, state: "awaiting_user_confirmation" | "confirming" | "confirmed" } | null>(null);
+  const deleteConfirmationTranscriptRef = useRef("");
+  const confirmationPromiseRef = useRef<{ resolve: (value: boolean) => void, reject: (reason?: any) => void } | null>(null);
+  const confirmationDebounceRef = useRef<number | null>(null);
 
   // ── Refs (mutable, no re-render) ───────────────────────────────────────────
 
@@ -489,6 +492,78 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
           inputTranscriptRef.current += text;
           mark("speech_end_detected");
 
+          if (pendingDeleteRef.current?.state === "awaiting_user_confirmation") {
+            deleteConfirmationTranscriptRef.current += text;
+            
+            if (confirmationDebounceRef.current) {
+              window.clearTimeout(confirmationDebounceRef.current);
+            }
+            
+            confirmationDebounceRef.current = window.setTimeout(() => {
+              if (pendingDeleteRef.current?.state !== "awaiting_user_confirmation") return;
+              
+              const transcriptLower = deleteConfirmationTranscriptRef.current.toLowerCase();
+              const isRejection = /(não|deixa|cancela|não apaga|melhor não|sim, mas não apaga)/i.test(transcriptLower);
+              const pendingActionId = pendingDeleteRef.current.actionId;
+              const sessionId = sessionRef.current?.sessionId;
+              
+              console.log(`[DeleteFlow] confirmation transcript settled, action=${pendingActionId}`);
+
+              if (isRejection) {
+                console.log("[DeleteFlow] decision=cancelled");
+                void (async () => {
+                  try {
+                    const res = await fetch("/api/live-tools/confirm-delete", {
+                      method: "POST",
+                      headers: { "content-type": "application/json" },
+                      body: JSON.stringify({ sessionId, actionId: pendingActionId, confirmed: false })
+                    });
+                    const body = await res.json().catch(() => ({}));
+                    console.log(`[DeleteFlow] confirmation API status=${res.status} ok=${body.ok}`);
+                  } catch (e) {
+                    console.error("Failed to cancel delete action", e);
+                  } finally {
+                    pendingDeleteRef.current = null;
+                    if (confirmationPromiseRef.current) confirmationPromiseRef.current.resolve(false);
+                  }
+                })();
+              } else {
+                const isConfirmation = /(sim|pode apagar|eu confirmo|confirmo|pode deletar|é essa mesmo|sim, essa mesmo|sim, pode apagar|apaga)/i.test(transcriptLower);
+                if (isConfirmation) {
+                  console.log("[DeleteFlow] decision=confirmed");
+                  pendingDeleteRef.current.state = "confirming";
+                  void (async () => {
+                    try {
+                      const res = await fetch("/api/live-tools/confirm-delete", {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({ sessionId, actionId: pendingActionId, confirmed: true })
+                      });
+                      const body = await res.json().catch(() => ({}));
+                      console.log(`[DeleteFlow] confirmation API status=${res.status} ok=${body.ok}`);
+                      
+                      if (res.ok && body.ok && pendingDeleteRef.current?.actionId === pendingActionId) {
+                        pendingDeleteRef.current.state = "confirmed";
+                        if (confirmationPromiseRef.current) confirmationPromiseRef.current.resolve(true);
+                      } else if (pendingDeleteRef.current?.actionId === pendingActionId) {
+                        pendingDeleteRef.current.state = "awaiting_user_confirmation";
+                        if (confirmationPromiseRef.current) confirmationPromiseRef.current.resolve(false);
+                      }
+                    } catch (e) {
+                      console.error("Error confirming delete action", e);
+                      if (pendingDeleteRef.current?.actionId === pendingActionId) {
+                        pendingDeleteRef.current.state = "awaiting_user_confirmation";
+                        if (confirmationPromiseRef.current) confirmationPromiseRef.current.resolve(false);
+                      }
+                    }
+                  })();
+                } else {
+                  console.log("[DeleteFlow] decision=ambiguous");
+                }
+              }
+            }, 600);
+          }
+
           if (CMD_SLEEP.test(text) || CMD_END_NATURAL.test(text)) {
             void disconnect();
             return;
@@ -516,54 +591,6 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
       }
       // turnComplete
       if (serverContent.turnComplete) {
-        if (pendingDeleteRef.current && pendingDeleteRef.current.state === "awaiting_user_confirmation") {
-           const transcriptLower = inputTranscriptRef.current.toLowerCase();
-           const isRejection = /(não|deixa|cancela|não apaga|melhor não|sim, mas não apaga)/i.test(transcriptLower);
-           const pendingActionId = pendingDeleteRef.current.actionId;
-           const sessionId = sessionRef.current?.sessionId;
-           
-           if (isRejection) {
-             void (async () => {
-               try {
-                 await fetch("/api/live-tools/confirm-delete", {
-                   method: "POST",
-                   headers: { "content-type": "application/json" },
-                   body: JSON.stringify({ sessionId, actionId: pendingActionId, confirmed: false })
-                 });
-               } catch (e) {
-                 console.error("Failed to cancel delete action", e);
-               } finally {
-                 pendingDeleteRef.current = null;
-               }
-             })();
-           } else {
-             const isConfirmation = /(sim|pode apagar|confirmo|pode deletar|sim, essa mesmo|sim, pode apagar|apaga)/i.test(transcriptLower);
-             if (isConfirmation) {
-               pendingDeleteRef.current.state = "confirming";
-               void (async () => {
-                 try {
-                   const res = await fetch("/api/live-tools/confirm-delete", {
-                     method: "POST",
-                     headers: { "content-type": "application/json" },
-                     body: JSON.stringify({ sessionId, actionId: pendingActionId, confirmed: true })
-                   });
-                   const body = await res.json().catch(() => ({}));
-                   if (res.ok && body.ok && pendingDeleteRef.current?.actionId === pendingActionId) {
-                     pendingDeleteRef.current.state = "confirmed";
-                   } else if (pendingDeleteRef.current?.actionId === pendingActionId) {
-                     pendingDeleteRef.current.state = "awaiting_user_confirmation";
-                   }
-                 } catch (e) {
-                   console.error("Error confirming delete action", e);
-                   if (pendingDeleteRef.current?.actionId === pendingActionId) {
-                     pendingDeleteRef.current.state = "awaiting_user_confirmation";
-                   }
-                 }
-               })();
-             }
-           }
-        }
-
         mark("turn_complete");
         finalizeTurnMetrics();
         setStateAndRef("ready");
@@ -592,9 +619,31 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     for (const fc of functionCalls) {
       if (fc.name === "arkan_delete" && pendingDeleteRef.current && pendingDeleteRef.current.memoryId === (fc.args as any)?.memory_id) {
          if (pendingDeleteRef.current.state === "awaiting_user_confirmation") {
-           functionResponses.push({ id: fc.id, name: fc.name, response: { error: "confirmation_pending" } as Record<string, unknown> });
+           functionResponses.push({ id: fc.id, name: fc.name, response: { error: { code: "confirmation_pending" } } as Record<string, unknown> });
            continue;
          }
+      }
+
+      if (fc.name === "arkan_delete_commit" && pendingDeleteRef.current && pendingDeleteRef.current.actionId === (fc.args as any)?.action_id) {
+        if (pendingDeleteRef.current.state === "awaiting_user_confirmation" || pendingDeleteRef.current.state === "confirming") {
+          console.log(`[DeleteFlow] commit requested, state=${pendingDeleteRef.current.state}`);
+          let confirmed = false;
+          if (confirmationPromiseRef.current) {
+            confirmed = await Promise.race([
+              new Promise<boolean>((resolve) => {
+                const oldResolve = confirmationPromiseRef.current!.resolve;
+                confirmationPromiseRef.current!.resolve = (val) => { oldResolve(val); resolve(val); };
+              }),
+              new Promise<boolean>(resolve => setTimeout(() => resolve(false), 5000))
+            ]);
+          }
+          if (!confirmed) {
+            console.log(`[DeleteFlow] commit timed out or cancelled`);
+            functionResponses.push({ id: fc.id, name: fc.name, response: { ok: false, verified: false, error: { code: "confirmation_pending" } } as Record<string, unknown> });
+            continue;
+          }
+        }
+        console.log(`[DeleteFlow] commit dispatched`);
       }
 
       mark("tool_backend_started");
@@ -620,13 +669,24 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
           
           const toolData = data.data;
           if (toolData && toolData.confirmation_required) {
+            console.log(`[DeleteFlow] prepared action=${toolData.action_id} session=${logicalSession.sessionId}`);
+            deleteConfirmationTranscriptRef.current = "";
+            let resFn: (val: boolean) => void = () => {};
+            let rejFn: (reason?: any) => void = () => {};
+            // Dummy promise that gets replaced/monitored by the awaiter
+            const _p = new Promise<boolean>((resolve, reject) => { resFn = resolve; rejFn = reject; });
+            confirmationPromiseRef.current = { resolve: resFn, reject: rejFn };
+            
             pendingDeleteRef.current = { 
               actionId: toolData.action_id, 
               memoryId: toolData.memory_id, 
               state: "awaiting_user_confirmation" 
             };
           } else if (data.ok && data.operation === "delete_commit") {
+            console.log(`[DeleteFlow] commit result ok=true verified=true`);
             pendingDeleteRef.current = null;
+            deleteConfirmationTranscriptRef.current = "";
+            confirmationPromiseRef.current = null;
           }
         }
       } catch {
@@ -832,6 +892,13 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     setBytesSent(0);
     setBytesReceived(0);
     memoryResultsCountRef.current = 0;
+    
+    pendingDeleteRef.current = null;
+    deleteConfirmationTranscriptRef.current = "";
+    if (confirmationPromiseRef.current) confirmationPromiseRef.current.resolve(false);
+    confirmationPromiseRef.current = null;
+    if (confirmationDebounceRef.current) window.clearTimeout(confirmationDebounceRef.current);
+
     mark("session_connect_started");
 
     const logicalSession: LogicalSession = {
@@ -924,6 +991,12 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     setBytesSent(0);
     setBytesReceived(0);
     memoryResultsCountRef.current = 0;
+    
+    pendingDeleteRef.current = null;
+    deleteConfirmationTranscriptRef.current = "";
+    if (confirmationPromiseRef.current) confirmationPromiseRef.current.resolve(false);
+    confirmationPromiseRef.current = null;
+    if (confirmationDebounceRef.current) window.clearTimeout(confirmationDebounceRef.current);
 
     const logicalSession: LogicalSession = {
       sessionId: crypto.randomUUID(),
@@ -963,7 +1036,13 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     wsRef.current = null;
     setupCompleteRef.current = false;
     reconnectAttemptRef.current = false;
+    
     pendingDeleteRef.current = null;
+    deleteConfirmationTranscriptRef.current = "";
+    if (confirmationPromiseRef.current) confirmationPromiseRef.current.resolve(false);
+    confirmationPromiseRef.current = null;
+    if (confirmationDebounceRef.current) window.clearTimeout(confirmationDebounceRef.current);
+
     setStateAndRef("sleeping");
 
     // Persist conversation — real session end.

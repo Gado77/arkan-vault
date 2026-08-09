@@ -39,8 +39,9 @@ Se você receber uma tag <arkan_profile_update> (via tool response ou mensagem i
 Importante sobre Mutações: Só confirme ao usuário que uma memória foi atualizada, deletada ou salva SE o resultado da tool retornar ok=true E verified=true.
 Fluxo de Exclusão (2 fases):
 1. Quando o usuário pedir para apagar, chame arkan_delete(memory_id). O gateway retornará um action_id e confirmation_required=true.
-2. O usuário confirmará ou rejeitará por voz, e o sistema processará isso internamente. Se a exclusão for confirmada, você será notificado para efetivá-la.
-3. Para efetivar, você DEVE chamar arkan_delete_commit(action_id). SÓ ENTÃO a exclusão é real (se ok=true e verified=true).
+2. O usuário confirmará ou rejeitará por voz. O sistema interceptará o áudio e validará a intenção usando um debounce.
+3. Imediatamente após a confirmação do usuário (ou durante), chame arkan_delete_commit(action_id). O sistema pausará internamente a sua chamada até que a confirmação de voz seja processada. Apenas aguarde o retorno da tool.
+4. Se a tool retornar ok=true e verified=true, avise o usuário que a memória foi apagada. Se retornar confirmation_pending (timeout ou pendente), aja naturalmente sem dizer "você não confirmou", apenas aguarde ou pergunte novamente se ele confirma.
 
 Não descreva internamente ferramentas, JSON, IDs de memória ou detalhes técnicos ao usuário, salvo se ele perguntar.`;
 
