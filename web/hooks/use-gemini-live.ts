@@ -185,43 +185,21 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     setSilenceDurationMsState(ms);
   }
 
-  // ── Conversation Idle Timeout (45s) ────────────────────────────────────────
-
-  const resetIdleTimeout = useCallback(() => {
-    if (idleTimeoutRef.current) {
-      window.clearTimeout(idleTimeoutRef.current);
-      idleTimeoutRef.current = null;
-    }
-    // Only arm if we are in a live session and perfectly idle
-    if (stateRef.current === "ready") {
-      idleTimeoutRef.current = window.setTimeout(() => {
-        // Disconnect gently and let it fall back to sleeping
+  // ── Idle Timeout 10s based purely on state = ready
+  useEffect(() => {
+    let timeout: number | null = null;
+    if (state === "ready") {
+      timeout = window.setTimeout(() => {
         if (stateRef.current === "ready") {
-          console.log(`[GeminiLive] ${VOICE_IDLE_TIMEOUT_MS}ms idle timeout reached. Disconnecting session.`);
+          console.log("[GeminiLive] Idle timeout (10s) reached.");
           void disconnect();
         }
       }, VOICE_IDLE_TIMEOUT_MS);
     }
-  }, []);
-
-  // Make sure to clean up the idle timeout on unmount
-  useEffect(() => {
     return () => {
-      if (idleTimeoutRef.current) window.clearTimeout(idleTimeoutRef.current);
+      if (timeout) window.clearTimeout(timeout);
     };
-  }, []);
-
-  // Automatically arm the idle timeout when the session becomes completely idle
-  useEffect(() => {
-    if (state === "ready") {
-      resetIdleTimeout();
-    } else {
-      if (idleTimeoutRef.current) {
-        window.clearTimeout(idleTimeoutRef.current);
-        idleTimeoutRef.current = null;
-      }
-    }
-  }, [state, resetIdleTimeout]);
+  }, [state]);
 
   // ── Session timer ──────────────────────────────────────────────────────────
 
@@ -425,7 +403,6 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
 
     // toolCall — multiple function calls, one response
     if (msg.toolCall) {
-      resetIdleTimeout();
       const tc = msg.toolCall as Record<string, unknown>;
       const functionCalls = (tc.functionCalls as FunctionCall[] | undefined) ?? [];
       if (functionCalls.length > 0) {
@@ -439,7 +416,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     if (serverContent) {
       // interrupted (barge-in)
       if (serverContent.interrupted) {
-        resetIdleTimeout();
+        mark("turn_interrupted");
         mark("interruption_detected");
         setStateAndRef("interrupted");
         setInterruptCount((n) => n + 1);
@@ -452,7 +429,6 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
       // modelTurn
       const modelTurn = serverContent.modelTurn as Record<string, unknown> | undefined;
       if (modelTurn) {
-        resetIdleTimeout();
         const parts = (modelTurn.parts as Record<string, unknown>[]) ?? [];
         for (const part of parts) {
           const inlineData = part.inlineData as Record<string, unknown> | undefined;
@@ -465,11 +441,11 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
             bytesReceivedRef.current += buf.byteLength;
 
             if (!metricsRef.current.first_output_audio_received) {
-              mark("first_output_audio_received");
+              mark("first_response_token_received");
               setStateAndRef("speaking");
             }
             const isFirst = !metricsRef.current.first_output_audio_played;
-            queue.enqueue(buf, isFirst ? () => { mark("first_output_audio_played"); resetIdleTimeout(); } : undefined);
+            queue.enqueue(buf, isFirst ? () => { mark("first_output_audio_played"); } : undefined);
             if (isFirst) setStateAndRef("speaking");
           }
           if (typeof part.text === "string") {
@@ -484,7 +460,6 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
       if (inputTranscription) {
         const text = (inputTranscription.transcript as string) ?? "";
         if (text) {
-          resetIdleTimeout();
           setInputTranscript((prev) => prev + text);
           inputTranscriptRef.current += text;
           mark("speech_end_detected");
@@ -516,7 +491,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
       }
       // turnComplete
       if (serverContent.turnComplete) {
-        mark("turn_complete");
+        mark("turn_completed");
         finalizeTurnMetrics();
         setStateAndRef("ready");
       }
@@ -667,7 +642,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
         mark("speech_started");
       }
       mark("last_voice_activity");
-      resetIdleTimeout();
+      mark("last_voice_activity");
 
       const b64 = arrayBufferToBase64(buffer);
       const msg = JSON.stringify({
@@ -930,7 +905,8 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
 
     async function startWakeDetector() {
       if (!isMounted) return;
-      if (stateRef.current !== "sleeping" && stateRef.current !== "wake_detected") {
+      const shouldWakeRun = stateRef.current === "sleeping" || stateRef.current === "wake_detected" || (!micActive && stateRef.current !== "error" && stateRef.current !== "connecting");
+      if (!shouldWakeRun) {
         if (wakeReconnectTimeoutRef.current) {
           clearTimeout(wakeReconnectTimeoutRef.current);
           wakeReconnectTimeoutRef.current = null;
@@ -1000,7 +976,29 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
               if (msg.event === "wake") {
                 console.log("[WakeDetector] Wake word detected!", msg);
                 setWakeCount(c => c + 1);
-                void activateFromWake();
+                try {
+                  const ctx = audioCaptureEngine.getAudioContext();
+                  if (ctx) {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.type = "sine";
+                    osc.frequency.setValueAtTime(880, ctx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.1);
+                    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+                    osc.start();
+                    osc.stop(ctx.currentTime + 0.2);
+                  }
+                } catch (e) {}
+
+                if (sessionRef.current !== null && wsRef.current?.readyState === WebSocket.OPEN && setupCompleteRef.current) {
+                  console.log("[GeminiLive] Waking up existing session.");
+                  void startMic();
+                } else {
+                  void activateFromWake();
+                }
               }
             } catch {}
           }
@@ -1036,7 +1034,8 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
       }
     }
 
-    if (state === "sleeping" || state === "wake_detected") {
+    const shouldWakeRun = state === "sleeping" || state === "wake_detected" || (!micActive && state !== "error" && state !== "connecting");
+    if (shouldWakeRun) {
       if (!wakeWsRef.current || wakeWsRef.current.readyState === WebSocket.CLOSED) {
         startWakeDetector();
       }

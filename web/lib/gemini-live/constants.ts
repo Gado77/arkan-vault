@@ -55,7 +55,7 @@ export const CMD_SLEEP = /hermes[,.]?\s*(dormir|desligar|desliga)/i;
 export const CMD_STOP = /hermes[,.]?\s*(pare|para|cancelar|cancela)/i;
 export const CMD_MIC_OFF = /hermes[,.]?\s*desligue.*microfone/i;
 export const CMD_HARD_MIC_OFF = /hermes[,.]?\s*desligue\s+completamente\s+.*microfone/i;
-export const CMD_END_NATURAL = /era s[óo] isso|j[áa] resolveu|n[ãa]o preciso de mais nada/i;
+export const CMD_END_NATURAL = /era s[óo] isso|j[áa] resolveu|n[ãa]o preciso de mais nada|n[ãa]o, obrigad[oa]|valeu, era isso|pode deixar|[ée] s[óo] isso mesmo/i;
 
 export const ARKAN_TOOL_DECLARATIONS = [
   {

@@ -220,57 +220,7 @@ export function LiveVoiceView({ onSwitchToClassic }: LiveVoiceViewProps) {
         )}
       </div>
 
-      <div className="lv-diagnostic-panel" style={{ background: "rgba(0,0,0,0.5)", padding: "16px", borderRadius: "12px", border: "1px solid rgba(255,255,255,0.1)", fontSize: "13px", color: "#ccc", display: "grid", gap: "8px", width: "100%", maxWidth: "300px", margin: "20px auto 0" }}>
-        <div className="lv-diag-header" style={{ color: "#a855f7", fontWeight: "bold", marginBottom: "8px" }}>Wake & Arkan Diagnostics</div>
-        {live.wakeStatus !== "listening" && (
-           <div style={{ background: "rgba(239,68,68,0.2)", color: "#fca5a5", padding: "8px", borderRadius: "8px", textAlign: "center", marginBottom: "8px" }}>
-              <strong>Wake service offline</strong>
-           </div>
-        )}
-        <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>Wake Status:</span> <strong style={{ color: live.wakeStatus === "listening" ? "#4ade80" : "#fca5a5" }}>{live.wakeStatus}</strong></div>
-        <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}>
-          <span>Arkan Online:</span> 
-          <strong style={{ color: arkanStatus?.arkanOnline ? "#4ade80" : "#fca5a5" }}>
-            {arkanStatus ? (arkanStatus.arkanOnline ? "Yes" : "No") : "Buscando..."}
-          </strong>
-        </div>
-        {arkanStatus && (
-          <>
-            <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>API Contract:</span> <strong style={{ color: arkanStatus.contractCompatible ? "#4ade80" : "#fca5a5" }}>{arkanStatus.contractCompatible ? "Compatible" : "Incompatible"}</strong></div>
-            <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>Recall Available:</span> <strong style={{ color: arkanStatus.searchAvailable ? "#4ade80" : "#fca5a5" }}>{arkanStatus.searchAvailable ? "Yes" : "No"}</strong></div>
-            <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>Endpoint Mode:</span> <strong>{arkanStatus.mode}</strong></div>
-            <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>Health Latency:</span> <strong>{Math.round(arkanStatus.latencyMs)} ms</strong></div>
-          </>
-        )}
-        <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>Model:</span> <strong>{live.wakeModel}</strong></div>
-        <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>Threshold:</span> <strong>{live.wakeThreshold}</strong></div>
-        <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>Last Score:</span> <strong>{live.wakeScore.toFixed(3)}</strong></div>
-        <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>Peak Score:</span> <strong>{live.wakePeakScore.toFixed(3)}</strong></div>
-        <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>PCM Frames:</span> <strong>{live.wakePcmFramesSent}</strong></div>
-        <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>Wake Count:</span> <strong>{live.wakeCount}</strong></div>
-        <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>Capture Active:</span> <strong style={{ color: live.captureActive ? "#4ade80" : "#fca5a5" }}>{live.captureActive ? "Yes" : "No"}</strong></div>
-        
-        <div className="lv-diag-header" style={{ color: "#a855f7", fontWeight: "bold", marginTop: "16px", marginBottom: "8px" }}>Session Diagnostics</div>
-        <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>Reconnections:</span> <strong>{live.reconnections}</strong></div>
-        <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>Session Duration:</span> <strong>{live.sessionDurationSec}s</strong></div>
-        
-        {live.bootstrapMetrics && (
-          <>
-            <div className="lv-diag-header" style={{ color: "#a855f7", fontWeight: "bold", marginTop: "16px", marginBottom: "8px" }}>Bootstrap Context</div>
-            <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>Source:</span> <strong style={{ color: live.bootstrapMetrics.source === "unavailable" ? "#fca5a5" : "#4ade80" }}>{live.bootstrapMetrics.source}</strong></div>
-            <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>Age:</span> <strong>{Math.round(live.bootstrapMetrics.ageMs / 1000)}s</strong></div>
-            <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>Memories:</span> <strong>{live.bootstrapMetrics.count}</strong></div>
-            <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between" }}><span>Chars:</span> <strong>{live.bootstrapMetrics.chars}</strong></div>
-          </>
-        )}
-        {Object.keys(live.diagnosticIds || {}).length > 0 && (
-          <>
-            <div className="lv-diag-row" style={{ display: "flex", justifyContent: "space-between", marginTop: "8px", borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: "8px" }}>
-              <span>Diagnostic Keys:</span> <strong>{Object.keys(live.diagnosticIds).length}</strong>
-            </div>
-          </>
-        )}
-      </div>
+
 
       {/* Conversation history button */}
       {history.length > 0 && (
@@ -348,9 +298,14 @@ export function LiveVoiceView({ onSwitchToClassic }: LiveVoiceViewProps) {
 
         {/* Navigation */}
         <nav className="lv-drawer-nav">
+          <a href="/diagnostics" className="lv-drawer-link">
+            <span>📊</span>
+            <div><strong>Diagnóstico Arkan</strong><small>Status e Saúde do Vault</small></div>
+            <b>›</b>
+          </a>
           <a href="/live-test" className="lv-drawer-link">
             <span>⚡</span>
-            <div><strong>Diagnóstico</strong><small>Benchmark /live-test</small></div>
+            <div><strong>Benchmark Local</strong><small>/live-test</small></div>
             <b>›</b>
           </a>
           {onSwitchToClassic && (
