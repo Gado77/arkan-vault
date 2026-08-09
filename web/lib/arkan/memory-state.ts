@@ -30,7 +30,6 @@ export interface DeleteAction {
   title: string;
   requestedAt: number;
   expiresAt: number;
-  decision: "pending" | "confirmed" | "cancelled";
 }
 
 declare global {
@@ -79,7 +78,6 @@ export function createDeleteAction(logicalSessionId: string, memoryId: string, t
     title,
     requestedAt: Date.now(),
     expiresAt: Date.now() + ttlMs,
-    decision: "pending"
   };
   global.arkanDeleteActions.set(actionId, action);
   return action;
@@ -101,7 +99,7 @@ export function getDeleteAction(actionId: string): DeleteAction | null {
  */
 export function findPendingDeleteActionForMemory(logicalSessionId: string, memoryId: string): DeleteAction | null {
   for (const action of global.arkanDeleteActions.values()) {
-    if (action.logicalSessionId === logicalSessionId && action.memoryId === memoryId && action.decision === "pending") {
+    if (action.logicalSessionId === logicalSessionId && action.memoryId === memoryId) {
        if (Date.now() <= action.expiresAt) {
          return action;
        } else {
@@ -112,30 +110,7 @@ export function findPendingDeleteActionForMemory(logicalSessionId: string, memor
   return null;
 }
 
-export function confirmDeleteAction(params: { actionId: string; logicalSessionId: string; confirmed: boolean }): boolean {
-  const { actionId, logicalSessionId, confirmed } = params;
-  const action = getDeleteAction(actionId);
-  
-  if (!action) return false;
-  if (action.logicalSessionId !== logicalSessionId) return false;
-  
-  if (action.decision === "cancelled") {
-    return false; // cannot go back to confirmed if already cancelled
-  }
 
-  // Idempotency: if it's already confirmed and they ask to confirm again, it's fine.
-  if (action.decision === "confirmed" && confirmed) {
-    return true;
-  }
-  
-  action.decision = confirmed ? "confirmed" : "cancelled";
-  
-  if (!confirmed) {
-    global.arkanDeleteActions.delete(actionId);
-  }
-  
-  return true;
-}
 
 export function removeDeleteAction(actionId: string): void {
   global.arkanDeleteActions.delete(actionId);

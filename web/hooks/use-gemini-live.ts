@@ -130,9 +130,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
   const [captureActive, setCaptureActive] = useState(false);
   
   const [bootstrapMetrics, setBootstrapMetrics] = useState<{ source: string, count: number, chars: number, ageMs: number } | null>(null);
-  const pendingDeleteRef = useRef<{ actionId: string, memoryId: string, state: "awaiting_user_confirmation" | "confirming" | "committing" | "completed", result?: any, promise?: Promise<any>, resolve?: (value: any) => void } | null>(null);
-  const deleteConfirmationTranscriptRef = useRef("");
-  const confirmationDebounceRef = useRef<number | null>(null);
+
 
   // ── Refs (mutable, no re-render) ───────────────────────────────────────────
 
@@ -491,111 +489,6 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
           inputTranscriptRef.current += text;
           mark("speech_end_detected");
 
-          if (pendingDeleteRef.current?.state === "awaiting_user_confirmation") {
-            deleteConfirmationTranscriptRef.current += text;
-            
-            if (confirmationDebounceRef.current) {
-              window.clearTimeout(confirmationDebounceRef.current);
-            }
-            
-            confirmationDebounceRef.current = window.setTimeout(() => {
-              if (pendingDeleteRef.current?.state !== "awaiting_user_confirmation") return;
-              
-              const transcriptLower = deleteConfirmationTranscriptRef.current.toLowerCase();
-              const isRejection = /(não|deixa|cancela|não apaga|melhor não|sim, mas não apaga)/i.test(transcriptLower);
-              const pendingActionId = pendingDeleteRef.current.actionId;
-              const sessionId = sessionRef.current?.sessionId;
-              
-              console.log(`[DeleteFlow] confirmation transcript settled, action=${pendingActionId}`);
-
-              if (isRejection) {
-                console.log("[DeleteFlow] decision=cancelled");
-                void (async () => {
-                  try {
-                    const res = await fetch("/api/live-tools/confirm-delete", {
-                      method: "POST",
-                      headers: { "content-type": "application/json" },
-                      body: JSON.stringify({ sessionId, actionId: pendingActionId, confirmed: false })
-                    });
-                    const body = await res.json().catch(() => ({}));
-                    console.log(`[DeleteFlow] confirmation API status=${res.status} ok=${body.ok}`);
-                  } catch (e) {
-                    console.error("Failed to cancel delete action", e);
-                  } finally {
-                    if (pendingDeleteRef.current?.resolve) {
-                      pendingDeleteRef.current.resolve({ ok: false, verified: false, error: { code: "action_cancelled" } });
-                    }
-                    pendingDeleteRef.current = null;
-                  }
-                })();
-              } else {
-                const isConfirmation = /(sim|pode apagar|eu confirmo|confirmo|pode deletar|é essa mesmo|sim, essa mesmo|sim, pode apagar|apaga)/i.test(transcriptLower);
-                if (isConfirmation) {
-                  console.log("[DeleteFlow] decision=confirmed");
-                  pendingDeleteRef.current.state = "confirming";
-                  void (async () => {
-                    try {
-                      const res = await fetch("/api/live-tools/confirm-delete", {
-                        method: "POST",
-                        headers: { "content-type": "application/json" },
-                        body: JSON.stringify({ sessionId, actionId: pendingActionId, confirmed: true })
-                      });
-                      const body = await res.json().catch(() => ({}));
-                      console.log(`[DeleteFlow] confirmation API status=${res.status} ok=${body.ok}`);
-                      
-                      if (res.ok && body.ok && pendingDeleteRef.current?.actionId === pendingActionId) {
-                        console.log(`[DeleteFlow] runtime commit started`);
-                        pendingDeleteRef.current.state = "committing";
-                        
-                        const commitRes = await fetch("/api/live-tools/execute", {
-                          method: "POST",
-                          headers: { "content-type": "application/json" },
-                          body: JSON.stringify({
-                            sessionId,
-                            callId: `runtime-delete:${pendingActionId}`,
-                            name: "arkan_delete_commit",
-                            args: { action_id: pendingActionId }
-                          })
-                        });
-                        const commitBody = await commitRes.json().catch(() => ({}));
-                        console.log(`[DeleteFlow] runtime commit ok=${commitBody.ok} verified=${commitBody.verified}`);
-                        
-                        if (pendingDeleteRef.current?.actionId === pendingActionId) {
-                          pendingDeleteRef.current.state = "completed";
-                          pendingDeleteRef.current.result = commitBody;
-                          if (pendingDeleteRef.current.resolve) pendingDeleteRef.current.resolve(commitBody);
-                          
-                          if (commitBody.ok && commitBody.verified) {
-                            try {
-                              const getRes = await fetch("/api/live-tools/execute", {
-                                method: "POST",
-                                headers: { "content-type": "application/json" },
-                                body: JSON.stringify({ sessionId, callId: `runtime-get-check:${pendingActionId}`, name: "arkan_get", args: { memory_id: pendingDeleteRef.current.memoryId } })
-                              });
-                              console.log(`[DeleteFlow] GET after delete=${getRes.status === 200 ? (await getRes.json().catch(()=>({}))).error === "not_found" ? "404" : "exists" : getRes.status}`);
-                            } catch (e) {}
-                            console.log(`[DeleteFlow] completed`);
-                          }
-                        }
-                      } else if (pendingDeleteRef.current?.actionId === pendingActionId) {
-                        pendingDeleteRef.current.state = "awaiting_user_confirmation";
-                        if (pendingDeleteRef.current.resolve) pendingDeleteRef.current.resolve({ ok: false, verified: false, error: { code: "confirmation_pending" }});
-                      }
-                    } catch (e) {
-                      console.error("Error confirming delete action", e);
-                      if (pendingDeleteRef.current?.actionId === pendingActionId) {
-                        pendingDeleteRef.current.state = "awaiting_user_confirmation";
-                        if (pendingDeleteRef.current.resolve) pendingDeleteRef.current.resolve({ ok: false, verified: false, error: { code: "confirmation_pending" }});
-                      }
-                    }
-                  })();
-                } else {
-                  console.log("[DeleteFlow] decision=ambiguous");
-                }
-              }
-            }, 600);
-          }
-
           if (CMD_SLEEP.test(text) || CMD_END_NATURAL.test(text)) {
             void disconnect();
             return;
@@ -649,40 +542,6 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     let memCount = 0;
 
     for (const fc of functionCalls) {
-      if (fc.name === "arkan_delete" && pendingDeleteRef.current && pendingDeleteRef.current.memoryId === (fc.args as any)?.memory_id) {
-         console.log(`[DeleteFlow] duplicate delete intercepted`);
-         const pState = pendingDeleteRef.current.state;
-         if (pState === "awaiting_user_confirmation") {
-           functionResponses.push({ id: fc.id, name: fc.name, response: { error: { code: "confirmation_pending" } } as Record<string, unknown> });
-           continue;
-         } else if (pState === "confirming" || pState === "committing") {
-           const result = await pendingDeleteRef.current.promise;
-           functionResponses.push({ id: fc.id, name: fc.name, response: result as Record<string, unknown> });
-           continue;
-         } else if (pState === "completed") {
-           console.log(`[DeleteFlow] returning completed result`);
-           functionResponses.push({ id: fc.id, name: fc.name, response: pendingDeleteRef.current.result as Record<string, unknown> });
-           continue;
-         }
-      }
-
-      if (fc.name === "arkan_delete_commit" && pendingDeleteRef.current && pendingDeleteRef.current.actionId === (fc.args as any)?.action_id) {
-        const pState = pendingDeleteRef.current.state;
-        if (pState === "awaiting_user_confirmation" || pState === "confirming" || pState === "committing") {
-          console.log(`[DeleteFlow] commit requested, state=${pState}`);
-          const result = await Promise.race([
-            pendingDeleteRef.current.promise,
-            new Promise(resolve => setTimeout(() => resolve({ ok: false, verified: false, error: { code: "confirmation_pending" } }), 5000))
-          ]);
-          functionResponses.push({ id: fc.id, name: fc.name, response: result as Record<string, unknown> });
-          continue;
-        } else if (pState === "completed") {
-          console.log(`[DeleteFlow] returning completed result`);
-          functionResponses.push({ id: fc.id, name: fc.name, response: pendingDeleteRef.current.result as Record<string, unknown> });
-          continue;
-        }
-      }
-
       mark("tool_backend_started");
       let output: unknown;
       try {
@@ -703,23 +562,6 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
         } else {
           output = data;
           if (Array.isArray(data.results)) memCount += data.results.length;
-          
-          const toolData = data.data;
-          if (toolData && toolData.confirmation_required) {
-            console.log(`[DeleteFlow] prepared action=${toolData.action_id} session=${logicalSession.sessionId}`);
-            deleteConfirmationTranscriptRef.current = "";
-            
-            let resFn: (val: any) => void = () => {};
-            const promise = new Promise<any>((resolve) => { resFn = resolve; });
-            
-            pendingDeleteRef.current = { 
-              actionId: toolData.action_id, 
-              memoryId: toolData.memory_id, 
-              state: "awaiting_user_confirmation",
-              promise,
-              resolve: resFn
-            };
-          }
         }
       } catch {
         mark("tool_backend_finished");
@@ -1023,10 +865,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     setBytesReceived(0);
     memoryResultsCountRef.current = 0;
     
-    if (pendingDeleteRef.current?.resolve) pendingDeleteRef.current.resolve({ ok: false, verified: false, error: { code: "action_cancelled" }});
-    pendingDeleteRef.current = null;
-    deleteConfirmationTranscriptRef.current = "";
-    if (confirmationDebounceRef.current) window.clearTimeout(confirmationDebounceRef.current);
+
 
     const logicalSession: LogicalSession = {
       sessionId: crypto.randomUUID(),
@@ -1067,10 +906,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     setupCompleteRef.current = false;
     reconnectAttemptRef.current = false;
     
-    if (pendingDeleteRef.current?.resolve) pendingDeleteRef.current.resolve({ ok: false, verified: false, error: { code: "action_cancelled" }});
-    pendingDeleteRef.current = null;
-    deleteConfirmationTranscriptRef.current = "";
-    if (confirmationDebounceRef.current) window.clearTimeout(confirmationDebounceRef.current);
+
 
     setStateAndRef("sleeping");
 

@@ -436,9 +436,6 @@ export async function commitDelete(actionId: string, logicalSessionId: string, c
     return { ok: false, verified: false, operation: "delete_commit", error: { code: "action_session_mismatch" } };
   }
 
-  if (action.decision !== "confirmed") {
-    return { ok: false, verified: false, operation: "delete_commit", error: { code: "action_not_confirmed" } };
-  }
 
   const start = performance.now();
   const path = `${ARKAN_PATHS.memories}/${action.memoryId}`;

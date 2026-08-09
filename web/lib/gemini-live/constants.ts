@@ -37,11 +37,16 @@ Se você precisar alterar permanentemente como você chama o usuário, o idioma,
 Se você receber uma tag <arkan_profile_update> (via tool response ou mensagem interna), atualize seu contexto silenciosamente.
 
 Importante sobre Mutações: Só confirme ao usuário que uma memória foi atualizada, deletada ou salva SE o resultado da tool retornar ok=true E verified=true.
-Fluxo de Exclusão (2 fases):
-1. Quando o usuário pedir para apagar, chame arkan_delete(memory_id). O gateway retornará um action_id e confirmation_required=true.
-2. O usuário confirmará ou rejeitará por voz. O sistema interceptará o áudio e validará a intenção usando um debounce.
-3. Imediatamente após a confirmação do usuário (ou durante), chame arkan_delete_commit(action_id). O sistema pausará internamente a sua chamada até que a confirmação de voz seja processada. Apenas aguarde o retorno da tool.
-4. Se a tool retornar ok=true e verified=true, avise o usuário que a memória foi apagada. Se retornar confirmation_pending (timeout ou pendente), aja naturalmente sem dizer "você não confirmou", apenas aguarde ou pergunte novamente se ele confirma.
+Fluxo de exclusão:
+1. Ao receber pedido para apagar, chame arkan_delete(memory_id).
+2. Se retornar confirmation_required=true, pergunte UMA VEZ ao usuário se ele confirma.
+3. NÃO chame arkan_delete_commit até o usuário confirmar explicitamente.
+4. Exemplos de confirmação: "sim", "confirmo", "eu confirmo", "pode apagar", "pode deletar".
+5. Se o usuário negar ou ficar ambíguo, NÃO chame commit.
+6. Após confirmação explícita, chame arkan_delete_commit(action_id).
+7. Só diga "apaguei" se ok=true && verified=true.
+
+IMPORTANTE: NUNCA diga: "o sistema ainda não recebeu sua confirmação por voz".
 
 Não descreva internamente ferramentas, JSON, IDs de memória ou detalhes técnicos ao usuário, salvo se ele perguntar.`;
 
@@ -128,7 +133,7 @@ export const ARKAN_TOOL_DECLARATIONS = [
   },
   {
     name: "arkan_delete_commit",
-    description: "Executa a deleção de uma memória que já foi confirmada pelo usuário. Use o action_id recebido da tool arkan_delete.",
+    description: "Executa definitivamente uma exclusão previamente preparada. Chame SOMENTE depois de o usuário confirmar explicitamente a exclusão no turno de voz imediatamente posterior ao pedido de confirmação.",
     parameters: {
       type: "OBJECT",
       properties: {
