@@ -925,10 +925,9 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     setBytesReceived(0);
     memoryResultsCountRef.current = 0;
     
+    if (pendingDeleteRef.current?.resolve) pendingDeleteRef.current.resolve({ ok: false, verified: false, error: { code: "action_cancelled" }});
     pendingDeleteRef.current = null;
     deleteConfirmationTranscriptRef.current = "";
-    if (confirmationPromiseRef.current) confirmationPromiseRef.current.resolve(false);
-    confirmationPromiseRef.current = null;
     if (confirmationDebounceRef.current) window.clearTimeout(confirmationDebounceRef.current);
 
     mark("session_connect_started");
@@ -1024,10 +1023,9 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     setBytesReceived(0);
     memoryResultsCountRef.current = 0;
     
+    if (pendingDeleteRef.current?.resolve) pendingDeleteRef.current.resolve({ ok: false, verified: false, error: { code: "action_cancelled" }});
     pendingDeleteRef.current = null;
     deleteConfirmationTranscriptRef.current = "";
-    if (confirmationPromiseRef.current) confirmationPromiseRef.current.resolve(false);
-    confirmationPromiseRef.current = null;
     if (confirmationDebounceRef.current) window.clearTimeout(confirmationDebounceRef.current);
 
     const logicalSession: LogicalSession = {
@@ -1069,10 +1067,9 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     setupCompleteRef.current = false;
     reconnectAttemptRef.current = false;
     
+    if (pendingDeleteRef.current?.resolve) pendingDeleteRef.current.resolve({ ok: false, verified: false, error: { code: "action_cancelled" }});
     pendingDeleteRef.current = null;
     deleteConfirmationTranscriptRef.current = "";
-    if (confirmationPromiseRef.current) confirmationPromiseRef.current.resolve(false);
-    confirmationPromiseRef.current = null;
     if (confirmationDebounceRef.current) window.clearTimeout(confirmationDebounceRef.current);
 
     setStateAndRef("sleeping");
