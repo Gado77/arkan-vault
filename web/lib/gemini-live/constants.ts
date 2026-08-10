@@ -9,7 +9,7 @@ export const GEMINI_LIVE_WS =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained";
 
 /** Time in milliseconds of silence/inactivity before the session is automatically closed. */
-export const VOICE_IDLE_TIMEOUT_MS = 10000;
+export const VOICE_IDLE_TIMEOUT_MS = 25000;
 
 /** System instruction for Hermes voice identity (with Arkan memory rules). */
 export const HERMES_SYSTEM_INSTRUCTION = `Você é Hermes, um assistente pessoal de voz.
@@ -55,7 +55,32 @@ export const CMD_SLEEP = /hermes[,.]?\s*(dormir|desligar|desliga)/i;
 export const CMD_STOP = /hermes[,.]?\s*(pare|para|cancelar|cancela)/i;
 export const CMD_MIC_OFF = /hermes[,.]?\s*desligue.*microfone/i;
 export const CMD_HARD_MIC_OFF = /hermes[,.]?\s*desligue\s+completamente\s+.*microfone/i;
-export const CMD_END_NATURAL = /era s[óo] isso|j[áa] resolveu|n[ãa]o preciso de mais nada|n[ãa]o, obrigad[oa]|valeu, era isso|pode deixar|[ée] s[óo] isso mesmo/i;
+const NATURAL_END_PHRASES = new Set([
+  "nao obrigado",
+  "nao obrigada",
+  "nao valeu",
+  "era so isso",
+  "e so isso",
+  "e so isso mesmo",
+  "valeu era isso",
+  "ja resolveu",
+  "nao preciso de mais nada",
+  "pode deixar",
+]);
+
+export function normalizeNaturalEndTurn(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function isNaturalEndTurn(text: string): boolean {
+  return NATURAL_END_PHRASES.has(normalizeNaturalEndTurn(text));
+}
 
 export const ARKAN_TOOL_DECLARATIONS = [
   {

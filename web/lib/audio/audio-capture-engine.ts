@@ -266,6 +266,11 @@ class AudioCaptureEngine {
     return this.analyser;
   }
 
+  /** Existing live context used only for immediate local UI feedback. */
+  public getAudioContext(): AudioContext | null {
+    return this.audioCtx;
+  }
+
   /**
    * Completely shuts down the microphone and context. Must be called explicitly now.
    */

@@ -21,9 +21,10 @@ import {
   CMD_STOP,
   CMD_MIC_OFF,
   CMD_HARD_MIC_OFF,
-  CMD_END_NATURAL,
+  isNaturalEndTurn,
   GEMINI_LIVE_WS,
   HERMES_SYSTEM_INSTRUCTION,
+  VOICE_IDLE_TIMEOUT_MS,
 } from "../lib/gemini-live/constants";
 import { audioCaptureEngine } from "../lib/audio/audio-capture-engine";
 import type {
@@ -36,8 +37,6 @@ import type {
   TurnMetrics,
   UseGeminiLiveOptions,
 } from "../lib/gemini-live/types";
-
-const VOICE_IDLE_TIMEOUT_MS = 10000;
 
 // ─── Public API surface ───────────────────────────────────────────────────────
 
@@ -138,6 +137,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
   const sessionRef = useRef<LogicalSession | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const audioQueueRef = useRef<AudioPlaybackQueue | null>(null);
+  const audioPlaybackActiveRef = useRef(false);
   const setupCompleteRef = useRef(false);
   const pcmCallbackRef = useRef<((buffer: ArrayBuffer) => void) | null>(null);
   const metricsRef = useRef<Metrics>({});
@@ -149,6 +149,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
   const reconnectAttemptRef = useRef(false);
   const inputTranscriptRef = useRef("");
   const outputTranscriptRef = useRef("");
+  const currentUserTurnTranscriptRef = useRef("");
   const memoryResultsCountRef = useRef(0);
   const wakeWsRef = useRef<WebSocket | null>(null);
   const wakePcmCallbackRef = useRef<((buffer: ArrayBuffer) => void) | null>(null);
@@ -159,6 +160,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
   const activationSourceRef = useRef<"manual" | "wake">("manual");
   const idleTimeoutRef = useRef<number | null>(null);
   const wakeTransitionTimeoutRef = useRef<number | null>(null);
+  const [wakeRearmGeneration, setWakeRearmGeneration] = useState(0);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -185,14 +187,32 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     setSilenceDurationMsState(ms);
   }
 
-  // ── Idle Timeout 10s based purely on state = ready
+  function requestWakeGreeting(): boolean {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !setupCompleteRef.current) return false;
+    ws.send(JSON.stringify({
+      clientContent: {
+        turns: [{
+          role: "user",
+          parts: [{
+            text: "O usuário acabou de dizer Hey Jarvis. Cumprimente-o agora, em português do Brasil, com uma única frase curta e natural. Não faça perguntas adicionais.",
+          }],
+        }],
+        turnComplete: true,
+      },
+    }));
+    setStateAndRef("thinking");
+    return true;
+  }
+
+  // ── Idle Timeout 25s based purely on the true idle state = ready.
   useEffect(() => {
     let timeout: number | null = null;
     if (state === "ready") {
       timeout = window.setTimeout(() => {
         if (stateRef.current === "ready") {
-          console.log("[GeminiLive] Idle timeout (10s) reached.");
-          void disconnect();
+          console.log("[GeminiLive] Idle timeout (25s) reached.");
+          void endConversation("idle");
         }
       }, VOICE_IDLE_TIMEOUT_MS);
     }
@@ -335,7 +355,11 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
       stopMic();
 
       if (ev.code === 1000 || ev.code === 1001) {
-        // Clean close — handled by the caller (disconnect or goAway reconnect).
+        // Caller-owned closes clear wsRef before close(). A clean close that
+        // still owns the live socket came from Gemini and must rearm Wake too.
+        if (wsRef.current === ws && sessionRef.current === logicalSession) {
+          void endConversation("gemini_normal_close");
+        }
         return;
       }
       if (reconnectAttemptRef.current) {
@@ -380,6 +404,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
           window.clearTimeout(wakeTransitionTimeoutRef.current);
           wakeTransitionTimeoutRef.current = null;
         }
+        requestWakeGreeting();
         void startMic();
       } else {
         setStateAndRef("ready");
@@ -421,6 +446,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
         setStateAndRef("interrupted");
         setInterruptCount((n) => n + 1);
         queue.interrupt();
+        audioPlaybackActiveRef.current = false;
         mark("playback_stopped");
         setStateAndRef("ready");
         return;
@@ -439,6 +465,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
             const view = new Uint8Array(buf);
             for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
             bytesReceivedRef.current += buf.byteLength;
+            audioPlaybackActiveRef.current = true;
 
             if (!metricsRef.current.first_output_audio_received) {
               mark("first_response_token_received");
@@ -462,10 +489,11 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
         if (text) {
           setInputTranscript((prev) => prev + text);
           inputTranscriptRef.current += text;
+          currentUserTurnTranscriptRef.current += text;
           mark("speech_end_detected");
 
-          if (CMD_SLEEP.test(text) || CMD_END_NATURAL.test(text)) {
-            void disconnect();
+          if (CMD_SLEEP.test(text) || isNaturalEndTurn(currentUserTurnTranscriptRef.current)) {
+            void endConversation(CMD_SLEEP.test(text) ? "sleep_command" : "natural_end");
             return;
           }
           if (CMD_MIC_OFF.test(text) || CMD_HARD_MIC_OFF.test(text)) {
@@ -493,14 +521,16 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
       if (serverContent.turnComplete) {
         mark("turn_completed");
         finalizeTurnMetrics();
-        setStateAndRef("ready");
+        currentUserTurnTranscriptRef.current = "";
+        if (!audioPlaybackActiveRef.current) setStateAndRef("ready");
       }
     }
 
     if (msg.generationComplete) {
       mark("turn_complete");
       finalizeTurnMetrics();
-      setStateAndRef("ready");
+      currentUserTurnTranscriptRef.current = "";
+      if (!audioPlaybackActiveRef.current) setStateAndRef("ready");
     }
   }
 
@@ -519,6 +549,22 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     for (const fc of functionCalls) {
       mark("tool_backend_started");
       let output: unknown;
+      if (fc.name === "hermes_end_conversation") {
+        output = { ok: true, ended: true };
+        mark("tool_backend_finished");
+        functionResponses.push({
+          id: fc.id,
+          name: fc.name,
+          response: output as Record<string, unknown>,
+        });
+        const ws = wsRef.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ toolResponse: { functionResponses } }));
+          mark("tool_response_sent");
+        }
+        void endConversation("hermes_end_conversation");
+        return;
+      }
       try {
         const res = await fetch("/api/live-tools/execute", {
           method: "POST",
@@ -706,6 +752,49 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     } catch { /* fire and forget */ }
   }
 
+  /**
+   * Canonical operational state after every normal conversation ending.
+   * It deliberately preserves the MediaStream/AudioContext. Hard-off remains
+   * the only path allowed to shut down the capture engine.
+   */
+  function returnToWakeMode() {
+    stopMic();
+    audioCaptureEngine.cancelTransition();
+    audioCaptureEngine.removeDestination("gemini-live");
+    audioCaptureEngine.addDestination("wake-detector");
+    wakeActivationRef.current = false;
+    activationSourceRef.current = "manual";
+    setupCompleteRef.current = false;
+    reconnectAttemptRef.current = false;
+    currentUserTurnTranscriptRef.current = "";
+    audioPlaybackActiveRef.current = false;
+    sessionRef.current = null;
+    setStateAndRef("sleeping");
+
+    if (wakeWsRef.current?.readyState === WebSocket.OPEN) {
+      setWakeStatus("listening");
+    } else {
+      setWakeStatus("connecting");
+      setWakeRearmGeneration((generation) => generation + 1);
+    }
+  }
+
+  async function endConversation(reason: string) {
+    const logicalSession = sessionRef.current;
+    audioQueueRef.current?.close();
+    audioQueueRef.current = null;
+
+    const ws = wsRef.current;
+    wsRef.current = null;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try { ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } })); } catch {}
+      ws.close(1000, reason);
+    }
+
+    if (logicalSession) await persistConversation(logicalSession);
+    returnToWakeMode();
+  }
+
   // ── Public: connect ────────────────────────────────────────────────────────
 
   const connect = useCallback(async () => {
@@ -759,6 +848,10 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     sessionRef.current = logicalSession;
 
     const queue = new AudioPlaybackQueue();
+    queue.onIdle = () => {
+      audioPlaybackActiveRef.current = false;
+      if (stateRef.current === "speaking") setStateAndRef("ready");
+    };
     audioQueueRef.current = queue;
 
     try {
@@ -852,6 +945,10 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
     sessionRef.current = logicalSession;
 
     const queue = new AudioPlaybackQueue();
+    queue.onIdle = () => {
+      audioPlaybackActiveRef.current = false;
+      if (stateRef.current === "speaking") setStateAndRef("ready");
+    };
     audioQueueRef.current = queue;
 
     try {
@@ -866,30 +963,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
   // ── Public: disconnect (logical session end) ───────────────────────────────
 
   const disconnect = useCallback(async () => {
-    const logicalSession = sessionRef.current;
-
-    stopMic();
-    audioQueueRef.current?.close();
-    audioQueueRef.current = null;
-
-    const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      try { ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } })); } catch {}
-      ws.close(1000, "user_disconnect");
-    }
-    wsRef.current = null;
-    setupCompleteRef.current = false;
-    reconnectAttemptRef.current = false;
-    
-
-
-    setStateAndRef("sleeping");
-
-    // Persist conversation — real session end.
-    if (logicalSession) {
-      await persistConversation(logicalSession);
-      sessionRef.current = null;
-    }
+    await endConversation("user_disconnect");
   }, []);
 
   // ── Wake Word detector ────────────────────────────────────────────────────
@@ -991,10 +1065,11 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
                     osc.start();
                     osc.stop(ctx.currentTime + 0.2);
                   }
-                } catch (e) {}
+                } catch {}
 
                 if (sessionRef.current !== null && wsRef.current?.readyState === WebSocket.OPEN && setupCompleteRef.current) {
                   console.log("[GeminiLive] Waking up existing session.");
+                  requestWakeGreeting();
                   void startMic();
                 } else {
                   void activateFromWake();
@@ -1074,7 +1149,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions = {}): UseGeminiLive
         wakeWsRef.current = null;
       }
     };
-  }, [state, connect]);
+  }, [state, connect, wakeRearmGeneration]);
 
   // ── Cleanup on unmount ────────────────────────────────────────────────────
 
